@@ -1,0 +1,12 @@
+# LambdaMOO Test Suite Dependencies
+
+# Test framework
+pytest>=7.0
+pytest-timeout>=2.0
+pytest-xdist>=3.0
+
+# Process management
+pexpect>=4.8
+
+# Utilities
+packaging>=21.0

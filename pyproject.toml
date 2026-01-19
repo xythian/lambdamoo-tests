@@ -1,0 +1,90 @@
+[project]
+name = "lambdamoo-test-suite"
+version = "0.1.0"
+description = "Integration test suite for LambdaMOO server"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "LambdaMOO Test Suite Contributors"}
+]
+keywords = ["lambdamoo", "moo", "testing", "integration-tests"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.0",
+    "pytest-xdist>=3.0",
+    "pexpect>=4.8",
+    "packaging>=21.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+lmt = "lambdamoo_tests.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/xythian/lambdamoo-tests"
+Repository = "https://github.com/xythian/lambdamoo-tests"
+Issues = "https://github.com/xythian/lambdamoo-tests/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lambdamoo_tests", "harness", "lib"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test_suites"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "unicode: marks tests that require Unicode support",
+    "waifs: marks tests that require WAIF support",
+    "xml: marks tests that require XML support",
+    "upgrade: marks database upgrade tests",
+    "task_persistence: marks task persistence tests",
+    "persistence: marks data persistence tests",
+]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]  # Line too long
+
+[tool.black]
+line-length = 120
+target-version = ["py38"]
