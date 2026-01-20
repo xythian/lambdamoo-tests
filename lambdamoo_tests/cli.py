@@ -572,6 +572,37 @@ def derive_server_name(repo: str, ref: str, config: str) -> str:
     return '_'.join(parts)
 
 
+def features_from_configure_flags(flags: list) -> list:
+    """Derive feature names from configure flags.
+
+    Args:
+        flags: List of configure flags like ["--enable-sz=i64", "--enable-waifs=dict"]
+
+    Returns:
+        List of feature names like ["i64", "waifs", "waif_dict"]
+    """
+    features = []
+    for flag in flags:
+        if flag == "--enable-sz=i64":
+            features.append("i64")
+        elif flag == "--enable-sz=i32":
+            features.append("i32")
+        elif flag == "--enable-unicode":
+            features.append("unicode")
+        elif flag == "--enable-xml":
+            features.append("xml")
+        elif flag == "--enable-waifs":
+            features.append("waifs")
+        elif flag == "--enable-waifs=dict":
+            features.append("waifs")
+            features.append("waif_dict")
+        elif flag == "--enable-def-WAIF_DICT":
+            features.append("waif_dict")
+        elif flag == "--enable-def-BITWISE_OPERATORS":
+            features.append("bitwise")
+    return features
+
+
 def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tuple:
     """Resolve a binary from cache or build it.
 
@@ -594,18 +625,23 @@ def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tupl
         name = derive_server_name(repo, ref, config)
 
     # Validate config name if provided
+    build_config_obj = None
     if config:
-        bc = get_build_config(config, cfg)
-        if bc is None:
+        build_config_obj = get_build_config(config, cfg)
+        if build_config_obj is None:
             available = ", ".join(cfg.build_configs.keys())
             raise ValueError(f"Unknown build config: {config}. Available: {available}")
 
-    # Get known features from repo config (if this is a known repo)
-    known_features = None
+    # Get known features - first from repo config, then augment with build config
+    known_features = []
     if repo in cfg.repos:
         repo_config = cfg.repos[repo]
         if repo_config.known_features:
-            known_features = repo_config.known_features
+            known_features = list(repo_config.known_features)
+
+    # If we have a build config, derive features from its flags
+    if build_config_obj and not known_features:
+        known_features = features_from_configure_flags(build_config_obj.configure_flags)
 
     # Build description for logging
     spec_str = repo

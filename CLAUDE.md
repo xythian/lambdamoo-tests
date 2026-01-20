@@ -28,30 +28,50 @@ Use docstrings for modules, classes, and public functions. Include Args/Returns/
 
 ## Testing Workflow
 
+### Running Commands
+All commands should be run via `uv run` to use the project's virtual environment:
+
+```bash
+uv run lmt <command>    # Run lmt commands
+uv run pytest <args>    # Run tests
+```
+
 ### Before Completing Any Task
 Always run the test suite to verify changes work:
 
 ```bash
 # Quick smoke test (if you have a cached build)
-pytest -x -q
+uv run pytest -x -q
 
 # Run full suite
-pytest
+uv run pytest
 
 # Run specific test file
-pytest test_suites/builtins/test_capabilities.py -v
+uv run pytest test_suites/builtins/test_capabilities.py -v
 ```
 
 ### If No MOO Binary Available
 Build one first:
 ```bash
-lmt build --repo lambdamoo
+uv run lmt build --repo lambdamoo
+```
+
+### Building with Specific Features
+```bash
+# Build with waifs enabled
+uv run lmt build --repo lambdamoo --config i64_waifs
+
+# Build with bitwise operators
+uv run lmt build --repo lambdamoo --config i64_bitwise
+
+# See available configs
+uv run lmt build --list-configs
 ```
 
 ### Test with Tracing (for debugging)
 ```bash
-pytest --moo-trace -k test_name
-pytest --moo-trace-on-failure
+uv run pytest --moo-trace -k test_name
+uv run pytest --moo-trace-on-failure
 ```
 
 ## Project Structure
@@ -69,6 +89,20 @@ pytest --moo-trace-on-failure
 2. Use existing fixtures (`client`, `server`, `requires_unicode`, etc.)
 3. Use assertion helpers from `lib.assertions`
 4. Write clear docstrings describing what the test validates
+
+### No Workarounds for Broken Behavior
+Never adjust tests to skip or work around apparently broken server behavior. When a test fails:
+
+1. **Investigate first** - The test itself may be wrong or not match expected semantics
+2. **If the test is correct** - Let it fail; that documents the bug in the server
+3. **If the test is wrong** - Fix the test to match correct expected behavior
+
+Do NOT:
+- Add `pytest.skip()` to avoid failing tests
+- Change assertions to accept broken output
+- Add conditionals to work around server bugs
+
+The purpose of the test suite is to validate server behavior. Workarounds defeat this purpose and hide bugs. A failing test is valuable - it documents what needs to be fixed.
 
 ### Feature-Dependent Tests
 ```python
@@ -93,4 +127,4 @@ All caches go to `~/.cache/lambdamoo-tests/`:
 - `builds/` - Compiled binaries (keyed by commit+flags)
 - `databases/` - Auto-generated test databases
 
-Use `lmt clean --list` to inspect, `lmt clean --all` to clear.
+Use `uv run lmt clean --list` to inspect, `uv run lmt clean --all` to clear.
