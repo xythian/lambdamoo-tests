@@ -77,24 +77,6 @@ lmt test --candidate ./builds/moo
 lmt setup --moo-binary /path/to/moo --minimal-db /path/to/Minimal.db
 ```
 
-## Obtaining Minimal.db
-
-The test suite requires a `Minimal.db` file to create test databases. This file is
-included in the LambdaMOO source distribution. You can obtain it by:
-
-1. Cloning a LambdaMOO repository:
-   ```bash
-   git clone https://github.com/wrog/lambdamoo
-   # Minimal.db is in the root directory
-   ```
-
-2. Or downloading from a MOO distribution
-
-Once you have it, either:
-- Set the `MOO_MINIMAL_DB` environment variable
-- Configure it in your config file
-- Or just build with `lmt build --repo lambdamoo` (Minimal.db will be found in the cloned repo)
-
 ## CLI Commands
 
 The test suite provides a unified `lmt` command with subcommands:
@@ -555,10 +537,10 @@ Options:
 
 ### "Minimal.db not found"
 
-Options:
-- Clone LambdaMOO repo and use its Minimal.db
-- Specify explicitly: `lmt setup --minimal-db /path/to/Minimal.db`
-- Set environment: `export MOO_MINIMAL_DB=/path/to/Minimal.db`
+Minimal.db is automatically found from the repository cache after building. If you haven't
+built yet, run: `lmt build --repo lambdamoo --config waterpoint`
+
+For manual override: `export MOO_MINIMAL_DB=/path/to/Minimal.db`
 
 ### Build failures
 
