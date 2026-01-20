@@ -574,6 +574,8 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_waifs = True
     if 'waif_dict' in known:
         features.has_waif_dict = True
+    if 'bitwise' in known:
+        features.has_bitwise = True
 
     return features
 
@@ -625,6 +627,13 @@ def requires_no_unicode(detected_features):
     """Skip if Unicode IS enabled (for testing non-Unicode behavior)."""
     if detected_features.has_unicode:
         pytest.skip("Test requires non-Unicode server")
+
+
+@pytest.fixture
+def requires_bitwise(detected_features):
+    """Skip if bitwise operators are not enabled."""
+    if not detected_features.has_bitwise:
+        pytest.skip("Test requires BITWISE_OPERATORS support")
 
 
 # ============================================================================

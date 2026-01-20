@@ -30,6 +30,7 @@ class ServerFeatures:
     has_waifs: bool = False
     has_waif_dict: bool = False
     has_regexp: bool = False
+    has_bitwise: bool = False
 
     def __post_init__(self):
         """Derive feature flags from raw options."""
@@ -43,10 +44,13 @@ class ServerFeatures:
         self.has_waifs = 'waif' in self.features or 'waifs' in self.features
         self.has_regexp = 'regexp' in self.features
 
-        # WAIF_DICT can be in options (as #-1 meaning enabled when waifs active)
+        # WAIF_DICT can be in options (True means enabled when waifs active)
         waif_dict_opt = self.options.get('WAIF_DICT')
-        # #-1 means enabled, {0} or None means disabled
-        self.has_waif_dict = self.has_waifs and (waif_dict_opt == '#-1' or waif_dict_opt is True)
+        self.has_waif_dict = self.has_waifs and waif_dict_opt is True
+
+        # BITWISE_OPERATORS can be in options or features
+        bitwise_opt = self.options.get('BITWISE_OPERATORS')
+        self.has_bitwise = 'bitwise' in self.features or bitwise_opt is True
 
     @property
     def config_name(self) -> str:
@@ -78,6 +82,7 @@ class ServerFeatures:
             'waifs': self.has_waifs,
             'waif_dict': self.has_waif_dict,
             'regexp': self.has_regexp,
+            'bitwise': self.has_bitwise,
         }
         return all(feature_map.get(f, False) for f in required_features)
 
@@ -170,9 +175,11 @@ def _parse_options_list(moo_list: str) -> Dict[str, Any]:
                 elif value.startswith('"') and value.endswith('"'):
                     options[key] = value[1:-1]
                 elif value == '#-1':
-                    options[key] = True
-                elif value == '{0}':
+                    # Object #-1 means "not defined" in version_options
                     options[key] = False
+                elif value == '{0}':
+                    # List {0} means "defined" in version_options
+                    options[key] = True
                 else:
                     options[key] = value
                 break
@@ -187,3 +194,4 @@ REQUIRES_XML = 'xml'
 REQUIRES_WAIFS = 'waifs'
 REQUIRES_WAIF_DICT = 'waif_dict'
 REQUIRES_REGEXP = 'regexp'
+REQUIRES_BITWISE = 'bitwise'

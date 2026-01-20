@@ -94,6 +94,16 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
         ],
         description="Full feature set (alias for waterpoint)",
     ),
+    "bitwise": BuildConfig(
+        name="bitwise",
+        configure_flags=["--enable-def-BITWISE_OPERATORS"],
+        description="Default build with bitwise operators enabled",
+    ),
+    "i64_bitwise": BuildConfig(
+        name="i64_bitwise",
+        configure_flags=["--enable-sz=i64", "--enable-def-BITWISE_OPERATORS"],
+        description="64-bit integers with bitwise operators",
+    ),
 }
 
 
@@ -179,7 +189,7 @@ class Config:
                 default_build_config="waterpoint",  # Single config
                 build_script="build.sh",  # Custom build script
                 # wp-lambdamoo doesn't report features via server_version
-                known_features=["i64", "unicode", "xml", "waifs", "waif_dict"],
+                known_features=["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"],
             )
 
         # Add predefined build configs if not overridden
