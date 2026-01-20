@@ -359,24 +359,22 @@ lambdamoo-tests/
 
 ## Test Categories
 
-### Network Tests (NET-xxx)
+### Network Tests (`test_suites/network/`)
 Validate TCP connection handling, line buffering, multiple connections,
 and output ordering.
 
-### Database Tests (DB-xxx)
+### Database Tests (`test_suites/database/`)
 Validate object creation, destruction, hierarchy, properties, and verbs.
 
-### Persistence Tests (PERS-xxx)
-Validate that data survives write, checkpoint, and read cycles.
+### Persistence Tests (`test_suites/persistence/`)
+Validate that data survives write, checkpoint, and read cycles. Includes
+tests for data types, verbs, and suspended/forked tasks.
 
-### Task Persistence Tests (TASK-xxx)
-Validate that suspended and forked tasks survive server restarts and
-produce correct results.
+### Builtin Tests (`test_suites/builtins/`)
+Validate arithmetic operations, string functions, list operations, and
+capability-dependent behavior.
 
-### Builtin Tests (ARITH-xxx, STR-xxx, LIST-xxx)
-Validate arithmetic operations, string functions, and list operations.
-
-### Upgrade Tests (UPG-xxx)
+### Upgrade Tests (`test_suites/upgrade/`)
 Validate database compatibility when upgrading from older versions.
 
 ## Writing Tests

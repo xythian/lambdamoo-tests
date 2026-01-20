@@ -68,7 +68,7 @@ pytest --moo-trace-on-failure
 1. Put tests in appropriate `test_suites/` subdirectory
 2. Use existing fixtures (`client`, `server`, `requires_unicode`, etc.)
 3. Use assertion helpers from `lib.assertions`
-4. Add test ID prefix (e.g., "ARITH-042") for traceability
+4. Write clear docstrings describing what the test validates
 
 ### Feature-Dependent Tests
 ```python
