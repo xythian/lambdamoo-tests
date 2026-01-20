@@ -45,7 +45,7 @@ pytest test_suites/builtins/test_capabilities.py -v
 ### If No MOO Binary Available
 Build one first:
 ```bash
-lmt build --repo lambdamoo --config waterpoint
+lmt build --repo lambdamoo
 ```
 
 ### Test with Tracing (for debugging)
