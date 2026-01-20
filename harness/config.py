@@ -81,8 +81,9 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-unicode",
             "--enable-xml",
             "--enable-waifs=dict",
+            "--enable-def-BITWISE_OPERATORS",
         ],
-        description="Full Waterpoint config (i64 + unicode + xml + waifs)",
+        description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise)",
     ),
     "full": BuildConfig(
         name="full",
@@ -91,6 +92,7 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-unicode",
             "--enable-xml",
             "--enable-waifs=dict",
+            "--enable-def-BITWISE_OPERATORS",
         ],
         description="Full feature set (alias for waterpoint)",
     ),
