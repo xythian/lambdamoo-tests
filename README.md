@@ -49,11 +49,11 @@ uv sync
 ### Simplest: Build and Test Automatically
 
 ```bash
-# Build and test LambdaMOO - databases are created automatically
-lmt test --build lambdamoo:waterpoint
+# Build and test LambdaMOO with default config
+lmt test --build lambdamoo
 
-# Upgrade testing: test lambdamoo with wp-lambdamoo as prior version
-lmt test --build lambdamoo:waterpoint --prior-build wp=wp-lambdamoo
+# Build with full feature set (i64, unicode, xml, waifs)
+lmt test --build lambdamoo:full
 ```
 
 Test databases are created automatically per-server when needed. Minimal.db is found
@@ -66,7 +66,7 @@ from the cloned repository cache.
 lmt test --candidate /path/to/moo
 
 # Or build first, then test
-lmt build --repo lambdamoo --config waterpoint --output ./builds/
+lmt build --repo lambdamoo --config full --output ./builds/
 lmt test --candidate ./builds/moo
 ```
 
@@ -92,8 +92,8 @@ lmt test     # Run the test suite
 
 ```bash
 # Use a project-local cache directory instead of ~/.cache/lambdamoo-tests
-lmt --cache-dir ./.lmt build --repo lambdamoo --config waterpoint
-lmt -C ./.lmt test --build lambdamoo:waterpoint
+lmt --cache-dir ./.lmt build --repo lambdamoo --config full
+lmt -C ./.lmt test --build lambdamoo:full
 ```
 
 ### lmt build
@@ -101,14 +101,17 @@ lmt -C ./.lmt test --build lambdamoo:waterpoint
 Build MOO server binaries from source or remote repositories.
 
 ```bash
-# Build from known repository with a named build config
-lmt build --repo lambdamoo --config waterpoint --output ./builds/
+# Build from known repository with default config
+lmt build --repo lambdamoo --output ./builds/
 
-# Build specific version/branch
+# Build with full feature set
+lmt build --repo lambdamoo --config full --output ./builds/
+
+# Build specific version/branch with specific config
 lmt build --repo lambdamoo --ref v1.8.1 --config i64_unicode
 
-# Build from wp-lambdamoo (defaults to waterpoint config)
-lmt build --repo wp-lambdamoo --ref main --output ./builds/wp/
+# Build from wp-lambdamoo (uses custom build script)
+lmt build --repo wp-lambdamoo --output ./builds/wp/
 
 # Build from any git URL
 lmt build --repo https://github.com/user/fork --ref feature-branch
@@ -148,7 +151,7 @@ Use `--config <name>` to select a predefined configuration:
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 The `wp-lambdamoo` repository uses a custom `build.sh` script and has a single integrated
-configuration equivalent to `waterpoint`. The `--config` flag is not needed for wp-lambdamoo.
+configuration equivalent to `full`. The `--config` flag is not needed for wp-lambdamoo.
 
 ### lmt setup
 
@@ -205,15 +208,15 @@ Run the test suite.
 lmt test --candidate ./builds/moo
 
 # Build/find candidate from repo+config (uses cache if available)
-lmt test --build lambdamoo:waterpoint
+lmt test --build lambdamoo
+lmt test --build lambdamoo:full
 lmt test --build lambdamoo:v1.8.1:i64_unicode
-lmt test -b wp-lambdamoo  # Uses build script, no config needed
 
 # Upgrade testing with explicit binaries
 lmt test --candidate ./new-moo --prior old:./old-moo
 
-# Upgrade testing with builds
-lmt test --build lambdamoo:waterpoint --prior-build wp=wp-lambdamoo
+# Upgrade testing with builds (e.g., test lambdamoo against prior wp-lambdamoo)
+lmt test --build lambdamoo:full --prior-build wp=wp-lambdamoo
 
 # Mix explicit binary and built priors
 lmt test --candidate ./moo --prior-build old=lambdamoo:v1.8.0:i64
@@ -232,7 +235,7 @@ lmt test -- -v --tb=long
 ```
 
 **Build spec format** (same for `--build` and after `=` in `--prior-build`):
-- `repo` - Use repo's build script (name derived from repo)
+- `repo` - Use repo's default config (name derived from repo)
 - `repo:config` - Repo with build config (name derived)
 - `repo:ref:config` - Repo with specific git ref and config
 - `name=repo` - Explicit name with repo
@@ -240,8 +243,9 @@ lmt test -- -v --tb=long
 - `name=repo:ref:config` - Explicit name with all components
 
 **Examples:**
-- `--build lambdamoo:waterpoint` - Name defaults to "lambdamoo_waterpoint"
-- `--build main=lambdamoo:waterpoint` - Explicit name "main"
+- `--build lambdamoo` - Default config, name defaults to "lambdamoo"
+- `--build lambdamoo:full` - Full config, name defaults to "lambdamoo_full"
+- `--build main=lambdamoo:full` - Explicit name "main"
 - `--prior-build wp=wp-lambdamoo` - Prior named "wp" using wp-lambdamoo
 
 ## Upgrade Testing
@@ -249,21 +253,23 @@ lmt test -- -v --tb=long
 Test database compatibility when upgrading between server versions:
 
 ```bash
-# Simple: test current lambdamoo against prior wp-lambdamoo
-lmt test --build lambdamoo:waterpoint \
-         --prior-build wp=wp-lambdamoo
+# Test against a prior version
+lmt test --build lambdamoo:full --prior-build old=lambdamoo:v1.8.0:i64
 
 # Multiple prior versions
-lmt test --build lambdamoo:waterpoint \
-         --prior-build wp=wp-lambdamoo \
-         --prior-build v1.8=lambdamoo:v1.8.0:i64
+lmt test --build lambdamoo:full \
+         --prior-build v1.8=lambdamoo:v1.8.0:i64 \
+         --prior-build v1.7=lambdamoo:v1.7.0:i64
+
+# Example: test lambdamoo against wp-lambdamoo (Waterpoint fork)
+lmt test --build lambdamoo:full --prior-build wp=wp-lambdamoo
 
 # Or manually build and use explicit paths
-lmt build --repo lambdamoo --config waterpoint --output ./builds/main/
-lmt build --repo wp-lambdamoo --output ./builds/wp/
+lmt build --repo lambdamoo --config full --output ./builds/main/
+lmt build --repo lambdamoo --ref v1.8.0 --config i64 --output ./builds/old/
 
 lmt test --candidate ./builds/main/moo \
-         --prior wp:./builds/wp/moo
+         --prior old:./builds/old/moo
 ```
 
 ## Configuration
@@ -477,10 +483,10 @@ To see all MOO protocol traffic during test execution:
 
 ```bash
 # Show all network traffic in real-time
-lmt test --build lambdamoo:waterpoint -- --moo-trace
+lmt test --build lambdamoo -- --moo-trace
 
 # Show transcript only when tests fail
-lmt test --build lambdamoo:waterpoint -- --moo-trace-on-failure
+lmt test --build lambdamoo -- --moo-trace-on-failure
 ```
 
 The `--moo-trace` option prints all send/receive operations with timestamps:
@@ -520,7 +526,7 @@ def test_with_trace(traced_client):
 
 ```bash
 # Keep databases, logs, and temp files after test run
-lmt test --build lambdamoo:waterpoint --keep-artifacts
+lmt test --build lambdamoo --keep-artifacts
 
 # Artifacts are in temp directories like /tmp/moo_candidate_xxxxx/
 ```
@@ -532,13 +538,13 @@ lmt test --build lambdamoo:waterpoint --keep-artifacts
 Options:
 - Specify explicitly: `lmt test --candidate /path/to/moo`
 - Set environment: `export MOO_BINARY=/path/to/moo`
-- Build from source: `lmt build --repo lambdamoo --config waterpoint`
+- Build from source: `lmt build --repo lambdamoo`
 - Configure in config file
 
 ### "Minimal.db not found"
 
 Minimal.db is automatically found from the repository cache after building. If you haven't
-built yet, run: `lmt build --repo lambdamoo --config waterpoint`
+built yet, run: `lmt build --repo lambdamoo`
 
 For manual override: `export MOO_MINIMAL_DB=/path/to/Minimal.db`
 
