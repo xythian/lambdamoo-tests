@@ -582,7 +582,7 @@ def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tupl
         name: Server name, or None to derive from spec.
 
     Returns:
-        Tuple of (name, Path to binary).
+        Tuple of (name, Path to binary, list of known features or None).
     """
     from harness.build import build_server
     from harness.config import get_config, get_build_config
@@ -599,6 +599,13 @@ def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tupl
         if bc is None:
             available = ", ".join(cfg.build_configs.keys())
             raise ValueError(f"Unknown build config: {config}. Available: {available}")
+
+    # Get known features from repo config (if this is a known repo)
+    known_features = None
+    if repo in cfg.repos:
+        repo_config = cfg.repos[repo]
+        if repo_config.known_features:
+            known_features = repo_config.known_features
 
     # Build description for logging
     spec_str = repo
@@ -618,7 +625,7 @@ def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tupl
     )
 
     print(f"  -> {binary}")
-    return (name, binary)
+    return (name, binary, known_features)
 
 
 def cmd_test(args):
@@ -628,6 +635,7 @@ def cmd_test(args):
     # Resolve candidate binary and name
     candidate_name = None
     candidate_binary = None
+    candidate_features = None
 
     if args.candidate:
         candidate_binary = args.candidate
@@ -638,7 +646,7 @@ def cmd_test(args):
     elif args.build_spec:
         try:
             name, repo, ref, config = parse_build_spec(args.build_spec)
-            candidate_name, candidate_binary = resolve_or_build(repo, ref, config, name)
+            candidate_name, candidate_binary, candidate_features = resolve_or_build(repo, ref, config, name)
         except Exception as e:
             print(f"Error building candidate: {e}", file=sys.stderr)
             return 1
@@ -657,7 +665,7 @@ def cmd_test(args):
     for prior_spec in args.prior_build:
         try:
             name, repo, ref, config = parse_prior_build_spec(prior_spec)
-            prior_name, binary = resolve_or_build(repo, ref, config, name)
+            prior_name, binary, _ = resolve_or_build(repo, ref, config, name)
             prior_args.append(f"{prior_name}:{binary}")
         except Exception as e:
             print(f"Error building prior: {e}", file=sys.stderr)
@@ -670,6 +678,8 @@ def cmd_test(args):
         pytest_cmd.append(f"--candidate={candidate_binary}")
         if candidate_name:
             pytest_cmd.append(f"--candidate-name={candidate_name}")
+        if candidate_features:
+            pytest_cmd.append(f"--candidate-features={','.join(candidate_features)}")
 
     for prior in prior_args:
         pytest_cmd.append(f"--prior={prior}")

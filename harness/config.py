@@ -107,6 +107,9 @@ class RepoConfig:
     default_build_config: str = ""
     # Custom build script (relative to repo root), if any
     build_script: str = ""
+    # Known features for repos that don't report them via server_version
+    # List of: i64, unicode, xml, waifs, waif_dict
+    known_features: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -175,6 +178,8 @@ class Config:
                 default_branch="main",
                 default_build_config="waterpoint",  # Single config
                 build_script="build.sh",  # Custom build script
+                # wp-lambdamoo doesn't report features via server_version
+                known_features=["i64", "unicode", "xml", "waifs", "waif_dict"],
             )
 
         # Add predefined build configs if not overridden

@@ -81,6 +81,12 @@ def pytest_addoption(parser):
         default=False,
         help="Show network transcript when a test fails"
     )
+    parser.addoption(
+        "--candidate-features",
+        action="store",
+        default=None,
+        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict)"
+    )
 
 
 def pytest_configure(config):
@@ -166,6 +172,7 @@ def candidate_config(request, project_root) -> ServerConfig:
     """Get configuration for the candidate (new) server."""
     binary_path = request.config.getoption("--candidate")
     name = request.config.getoption("--candidate-name")
+    features_opt = request.config.getoption("--candidate-features")
 
     if binary_path:
         binary_path = Path(binary_path).resolve()
@@ -181,10 +188,19 @@ def candidate_config(request, project_root) -> ServerConfig:
             "  - Configure in ~/.config/lambdamoo-tests/config.toml"
         )
 
+    # Parse known features if provided
+    known_features = {}
+    if features_opt:
+        for feat in features_opt.split(','):
+            feat = feat.strip()
+            if feat:
+                known_features[feat] = True
+
     return ServerConfig(
         binary=binary_path,
         name=name,
         version="unknown",  # Could query the binary
+        features=known_features,
     )
 
 
@@ -538,9 +554,28 @@ def server_features(client) -> list:
 
 
 @pytest.fixture
-def detected_features(client) -> ServerFeatures:
-    """Detect full server features using the features module."""
-    return detect_features(client)
+def detected_features(client, candidate_config) -> ServerFeatures:
+    """Detect full server features using the features module.
+
+    If candidate_config has known_features set (from --candidate-features),
+    those override the detected values.
+    """
+    features = detect_features(client)
+
+    # Apply known feature overrides from config
+    known = candidate_config.features or {}
+    if 'i64' in known:
+        features.has_i64 = True
+    if 'unicode' in known:
+        features.has_unicode = True
+    if 'xml' in known:
+        features.has_xml = True
+    if 'waifs' in known:
+        features.has_waifs = True
+    if 'waif_dict' in known:
+        features.has_waif_dict = True
+
+    return features
 
 
 @pytest.fixture
