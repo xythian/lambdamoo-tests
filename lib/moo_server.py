@@ -269,19 +269,35 @@ class MooClient(ClientProtocol):
 class MooServer(ServerProtocol):
     """LambdaMOO server implementation."""
 
+    # Pattern to extract the actual listening port from server log
+    LISTEN_PORT_PATTERN = re.compile(r'LISTEN:.*now listening on port (\d+)')
+
     def __init__(self, config: ServerConfig, work_dir: Optional[Path] = None,
                  trace: bool = False):
         super().__init__(config)
         self.work_dir = work_dir or Path(tempfile.mkdtemp(prefix='moo_test_'))
         self._instances: List[MooServerInstance] = []
-        self._next_port = 17777
+        self._instance_counter = 0  # For unique directory names
         self.trace = trace  # Default trace setting for connections
 
-    def _allocate_port(self) -> int:
-        """Allocate a unique port for a new server instance."""
-        port = self._next_port
-        self._next_port += 1
-        return port
+    def _wait_for_listen_port(self, log_file: Path, timeout: float = 10.0) -> Optional[int]:
+        """Wait for the server to log its listening port and return it.
+
+        The server logs 'LISTEN: #0 now listening on port <N>' when ready.
+        Using port 0 lets the OS assign an ephemeral port atomically.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            if log_file.exists():
+                content = log_file.read_text()
+                match = self.LISTEN_PORT_PATTERN.search(content)
+                if match:
+                    return int(match.group(1))
+                # Check for binding errors
+                if 'Address already in use' in content:
+                    return None
+            time.sleep(0.1)
+        return None
 
     def _wait_for_ready(self, port: int, timeout: float = 10.0) -> bool:
         """Wait for the server to be ready to accept connections."""
@@ -301,13 +317,22 @@ class MooServer(ServerProtocol):
 
     def start(self, database: Path, port: Optional[int] = None,
               work_dir: Optional[Path] = None) -> MooServerInstance:
-        """Start a LambdaMOO server instance."""
+        """Start a LambdaMOO server instance.
+
+        If port is not specified, uses ephemeral port assignment (port 0)
+        which lets the OS assign an available port atomically, avoiding
+        race conditions.
+        """
         database = Path(database).resolve()
         if not database.exists():
             raise FileNotFoundError(f"Database not found: {database}")
 
-        port = port or self._allocate_port()
-        instance_dir = work_dir or (self.work_dir / f"instance_{port}")
+        # Use ephemeral port (0) by default - OS assigns atomically
+        requested_port = port if port is not None else 0
+
+        # Create unique instance directory
+        self._instance_counter += 1
+        instance_dir = work_dir or (self.work_dir / f"instance_{self._instance_counter}")
         instance_dir.mkdir(parents=True, exist_ok=True)
 
         # Copy database to working directory
@@ -323,7 +348,7 @@ class MooServer(ServerProtocol):
             '-l', str(log_file),
             str(input_db),
             str(output_db),
-            '-p', str(port),
+            '-p', str(requested_port),
         ]
 
         # Start the server
@@ -334,9 +359,25 @@ class MooServer(ServerProtocol):
             cwd=str(instance_dir),
         )
 
+        # Wait for server to log its actual listening port
+        actual_port = self._wait_for_listen_port(log_file)
+        if actual_port is None:
+            # Server failed to start
+            process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            log_contents = log_file.read_text() if log_file.exists() else "(no log)"
+            raise RuntimeError(
+                f"Server failed to start - could not bind to port.\n"
+                f"Log contents:\n{log_contents}"
+            )
+
         instance = MooServerInstance(
             config=self.config,
-            port=port,
+            port=actual_port,
             input_db=input_db,
             output_db=output_db,
             work_dir=instance_dir,
@@ -344,8 +385,8 @@ class MooServer(ServerProtocol):
             log_file=log_file,
         )
 
-        # Wait for server to be ready
-        if not self._wait_for_ready(port):
+        # Verify we can actually connect
+        if not self._wait_for_ready(actual_port):
             self.stop(instance)
             log_contents = instance.get_log_contents()
             raise RuntimeError(
@@ -356,24 +397,41 @@ class MooServer(ServerProtocol):
         self._instances.append(instance)
         return instance
 
-    def stop(self, instance: MooServerInstance, timeout: float = 5.0) -> Path:
-        """Stop a LambdaMOO server instance."""
-        if not instance.is_running():
+    def stop(self, instance: MooServerInstance, timeout: float = 10.0) -> Path:
+        """Stop a LambdaMOO server instance and wait for database to be written.
+
+        The server writes its output database on graceful shutdown (SIGTERM),
+        so we must wait for the process to fully exit before the database
+        can be safely read by another server.
+        """
+        if instance in self._instances:
+            self._instances.remove(instance)
+
+        # Check if process already exited (but still need to reap it)
+        exit_code = instance.process.poll()
+        if exit_code is not None:
+            # Process already exited, just ensure it's reaped
+            instance.process.wait()
             return instance.output_db
 
-        # Try graceful shutdown first (SIGTERM)
+        # Try graceful shutdown first (SIGTERM) - server writes DB on SIGTERM
         instance.process.terminate()
 
         try:
             instance.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            # Force kill
+            # Force kill - database may not be written properly
             instance.process.kill()
             instance.process.wait()
 
-        if instance in self._instances:
-            self._instances.remove(instance)
+        # Wait for filesystem to sync and verify database exists
+        # The server writes the DB before exiting, but filesystem may buffer
+        for _ in range(10):  # Up to 1 second
+            if instance.output_db.exists():
+                return instance.output_db
+            time.sleep(0.1)
 
+        # Return path even if it doesn't exist - let caller handle the error
         return instance.output_db
 
     def connect(self, instance: MooServerInstance,
