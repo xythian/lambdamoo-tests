@@ -558,6 +558,11 @@ For manual override: `export MOO_MINIMAL_DB=/path/to/Minimal.db`
 lmt clean --list
 ```
 
+## Resources
+
+- [LambdaMOO Home](https://wrog.net/moo/) - Main LambdaMOO site with downloads and documentation
+- [LambdaMOO Programmer's Manual](https://wrog.net/moo/progman.html) - Complete reference for MOO programming
+
 ## License
 
 Apache License 2.0 - see LICENSE file for details.
