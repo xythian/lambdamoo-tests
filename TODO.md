@@ -68,7 +68,6 @@
 ## Server Modes
 
 - [ ] Emergency wizard mode (`-e` flag)
-- [ ] Emergency wizard mode authentication
 - [ ] Emergency wizard mode command restrictions
 - [ ] Panic mode / recovery scenarios
 
