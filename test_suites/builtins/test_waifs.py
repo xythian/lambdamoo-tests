@@ -253,29 +253,110 @@ class TestWaifLifecycle:
         result = client.eval(f'{waif_class}:test_list()')
         assert_moo_int(result, 3)
 
-    def test_waif_self_reference_error(self, client, waif_class):
-        """Waifs cannot contain self-references (E_RECMOVE)."""
-        client.eval(f'add_property({waif_class}, ":self_ref", 0, {{{waif_class}, "rw"}})')
-        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_self_ref"}}, {{"this", "none", "this"}})')
-        code = '{"w = new_waif();", "w.self_ref = w;", "return 1;"}'
-        client.eval(f'set_verb_code({waif_class}, "test_self_ref", {code})')
 
-        result = client.eval(f'{waif_class}:test_self_ref()')
+class TestWaifCycleProhibition:
+    """Tests for waif cycle prohibition.
+
+    Waifs cannot contain references to themselves, either directly or indirectly.
+    This prevents reference cycles that would complicate garbage collection.
+    The server raises E_RECMOVE when a cycle would be created.
+    """
+
+    def test_direct_self_reference(self, client, waif_class):
+        """Direct self-reference w.prop = w raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":ref", 0, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_direct"}}, {{"this", "none", "this"}})')
+        code = '{"w = new_waif();", "w.ref = w;", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_direct", {code})')
+
+        result = client.eval(f'{waif_class}:test_direct()')
         success, msg = result
-        assert not success, f"Self-reference should fail: {msg}"
-        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected recursive move error, got: {msg}"
+        assert not success, f"Direct self-reference should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
 
-    def test_waif_indirect_self_reference_error(self, client, waif_class):
-        """Waifs cannot contain indirect self-references."""
-        client.eval(f'add_property({waif_class}, ":indirect", 0, {{{waif_class}, "rw"}})')
-        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_indirect"}}, {{"this", "none", "this"}})')
-        code = '{"w = new_waif();", "w.indirect = {w};", "return 1;"}'
-        client.eval(f'set_verb_code({waif_class}, "test_indirect", {code})')
+    def test_self_in_list(self, client, waif_class):
+        """Self-reference via list w.prop = {w} raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":list_ref", {{}}, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_list"}}, {{"this", "none", "this"}})')
+        code = '{"w = new_waif();", "w.list_ref = {w};", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_list", {code})')
 
-        result = client.eval(f'{waif_class}:test_indirect()')
+        result = client.eval(f'{waif_class}:test_list()')
         success, msg = result
-        assert not success, f"Indirect self-reference should fail: {msg}"
-        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected recursive move error, got: {msg}"
+        assert not success, f"Self-in-list should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
+
+    def test_self_in_nested_list(self, client, waif_class):
+        """Self-reference via nested list w.prop = {{w}} raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":nested", {{}}, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_nested"}}, {{"this", "none", "this"}})')
+        code = '{"w = new_waif();", "w.nested = {{w}};", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_nested", {code})')
+
+        result = client.eval(f'{waif_class}:test_nested()')
+        success, msg = result
+        assert not success, f"Self-in-nested-list should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
+
+    def test_mutual_reference_two_waifs(self, client, waif_class):
+        """Mutual reference between two waifs (w1 -> w2 -> w1) raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":other", 0, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_mutual"}}, {{"this", "none", "this"}})')
+        # First assignment w1.other = w2 is fine, but w2.other = w1 creates cycle
+        code = '{"w1 = new_waif();", "w2 = new_waif();", "w1.other = w2;", "w2.other = w1;", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_mutual", {code})')
+
+        result = client.eval(f'{waif_class}:test_mutual()')
+        success, msg = result
+        assert not success, f"Mutual reference should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
+
+    def test_three_waif_cycle(self, client, waif_class):
+        """Cycle through three waifs (w1 -> w2 -> w3 -> w1) raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":next", 0, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_three"}}, {{"this", "none", "this"}})')
+        code = '{"w1 = new_waif();", "w2 = new_waif();", "w3 = new_waif();", "w1.next = w2;", "w2.next = w3;", "w3.next = w1;", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_three", {code})')
+
+        result = client.eval(f'{waif_class}:test_three()')
+        success, msg = result
+        assert not success, f"Three-waif cycle should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
+
+    def test_cycle_via_list_of_waifs(self, client, waif_class):
+        """Cycle via list containing multiple waifs raises E_RECMOVE."""
+        client.eval(f'add_property({waif_class}, ":refs", {{}}, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_list_cycle"}}, {{"this", "none", "this"}})')
+        # w1.refs = {w2, w3} is fine, but w2.refs = {w1} creates cycle
+        code = '{"w1 = new_waif();", "w2 = new_waif();", "w3 = new_waif();", "w1.refs = {w2, w3};", "w2.refs = {w1};", "return 1;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_list_cycle", {code})')
+
+        result = client.eval(f'{waif_class}:test_list_cycle()')
+        success, msg = result
+        assert not success, f"Cycle via list should fail: {msg}"
+        assert 'E_RECMOVE' in msg or 'Recursive' in msg, f"Expected E_RECMOVE, got: {msg}"
+
+    def test_no_cycle_separate_waifs(self, client, waif_class):
+        """Non-cyclic references between waifs should succeed."""
+        client.eval(f'add_property({waif_class}, ":link", 0, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_chain"}}, {{"this", "none", "this"}})')
+        # Linear chain: w1 -> w2 -> w3 (no cycle)
+        code = '{"w1 = new_waif();", "w2 = new_waif();", "w3 = new_waif();", "w1.link = w2;", "w2.link = w3;", "return w1.link.link == w3;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_chain", {code})')
+
+        result = client.eval(f'{waif_class}:test_chain()')
+        assert_moo_int(result, 1, "Linear chain should succeed")
+
+    def test_no_cycle_sibling_references(self, client, waif_class):
+        """Multiple waifs referencing the same waif (diamond) should succeed."""
+        client.eval(f'add_property({waif_class}, ":target", 0, {{{waif_class}, "rw"}})')
+        client.eval(f'add_verb({waif_class}, {{{waif_class}, "xd", "test_diamond"}}, {{"this", "none", "this"}})')
+        # Diamond: w1 -> w3, w2 -> w3 (shared reference, no cycle)
+        code = '{"w1 = new_waif();", "w2 = new_waif();", "w3 = new_waif();", "w1.target = w3;", "w2.target = w3;", "return w1.target == w2.target;"}'
+        client.eval(f'set_verb_code({waif_class}, "test_diamond", {code})')
+
+        result = client.eval(f'{waif_class}:test_diamond()')
+        assert_moo_int(result, 1, "Diamond reference should succeed")
 
 
 class TestWaifTypeChecks:
