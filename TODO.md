@@ -54,6 +54,15 @@
 - [ ] Verb code compatibility across versions
 - [ ] Object hierarchy changes during upgrade
 
+## Persistence - Database Round-Trip Validation
+
+- [ ] Load production database with candidate server version
+- [ ] Checkpoint/save and compare against original
+- [ ] Diff analysis for unexpected changes (object IDs, property values, verb code)
+- [ ] Binary-level comparison of database files
+- [ ] Validate no data loss or corruption through load/save cycle
+- [ ] Test with databases from different server versions/forks
+
 ## Builtins - Gaps
 
 - [ ] `call_function()` - indirect function calls
