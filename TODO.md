@@ -2,12 +2,12 @@
 
 ## Checkpointing
 
-- [ ] Basic checkpoint functionality (`dump_database()`)
+- [x] Basic checkpoint functionality (`dump_database()`)
 - [ ] Checkpoint scheduling (`set_checkpoint_interval()`, automatic checkpoints)
 - [ ] Checkpoint during active tasks (verify tasks survive)
 - [ ] Checkpoint with pending network I/O
 - [ ] Emergency checkpoint on shutdown signals
-- [ ] Checkpoint file integrity verification
+- [x] Checkpoint file integrity verification
 
 ## Network - Port Listening
 
