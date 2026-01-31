@@ -122,8 +122,8 @@ class TestNetworkConnections:
     def test_read(self, client):
         """Test read() function."""
         # Create a verb that reads input
-        client.eval('add_verb(#0, {#1, "xd", "do_read"}, {"this", "none", "this"})')
-        client.eval('set_verb_code(#0, "do_read", {"return read();"})')
+        client.eval_expect_success('add_verb(#0, {#1, "xd", "do_read"}, {"this", "none", "this"})')
+        client.eval_expect_success('set_verb_code(#0, "do_read", {"return read();"})')
 
         # Send command to call the verb
         # This will suspend waiting for input
@@ -231,7 +231,7 @@ class TestNetworkConnections:
             else:
                 # Accept failure if it's strictly permission related
                 # E_PERM means wizard only (we are wizard) or outbound disabled
-                if "E_PERM" in result:
+                if "E_PERM" in result or "Permission denied" in result:
                     pytest.skip("open_network_connection disabled (E_PERM)")
                 else:
                     pytest.fail(f"open_network_connection failed: {result}")
