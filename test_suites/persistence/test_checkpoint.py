@@ -3,10 +3,13 @@
 These tests verify database checkpoint operations including:
 - Basic checkpoint with dump_database()
 - Scheduled checkpoints via #0.dump_interval
+- Emergency checkpoint on shutdown signals
 - Checkpoint file creation and integrity
 - Data persistence through checkpoint cycles
 """
 
+import os
+import signal
 import shutil
 import time
 from pathlib import Path
@@ -453,6 +456,99 @@ class TestScheduledCheckpoint:
         try:
             result = read_client.eval('#0.after_reread')
             assert_moo_int(result, 777, "Data should persist after dump_interval re-read")
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
+
+@pytest.mark.persistence
+class TestEmergencyCheckpoint:
+    """Tests for checkpoint behavior on shutdown signals."""
+
+    def test_sigterm_triggers_checkpoint(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """SIGTERM causes server to checkpoint before exiting."""
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            # Make a change but do NOT explicitly checkpoint
+            write_client.eval('add_property(#0, "sigterm_saved", 54321, {#1, "rw"})')
+        finally:
+            write_client.close()
+            # Normal stop() sends SIGTERM
+            output_db = server_pair.write_server.stop(write_instance)
+
+        # Data should persist because SIGTERM triggers checkpoint
+        read_instance = server_pair.read_server.start(database=output_db)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            result = read_client.eval('#0.sigterm_saved')
+            assert_moo_int(result, 54321, "Data should persist after SIGTERM shutdown")
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
+    def test_sigkill_does_not_checkpoint(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """SIGKILL terminates server immediately without checkpoint.
+
+        This tests crash/forced-kill behavior where data loss is expected.
+        """
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        # First, create a baseline with explicit checkpoint
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            write_client.eval('add_property(#0, "baseline", 100, {#1, "rw"})')
+            write_client.checkpoint()
+        finally:
+            write_client.close()
+            phase1_db = server_pair.write_server.stop(write_instance)
+
+        # Now restart, make unsaved changes, and SIGKILL
+        write_instance = server_pair.write_server.start(database=phase1_db)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            # Change without checkpoint
+            write_client.eval('#0.baseline = 999')
+            write_client.eval('add_property(#0, "unsaved", 888, {#1, "rw"})')
+        finally:
+            write_client.close()
+
+        # Force kill with SIGKILL - no chance to checkpoint
+        pid = write_instance.process.pid
+        os.kill(pid, signal.SIGKILL)
+        write_instance.process.wait()
+
+        # Remove instance from server's tracking
+        if write_instance in server_pair.write_server._instances:
+            server_pair.write_server._instances.remove(write_instance)
+
+        # Data should NOT reflect unsaved changes
+        read_instance = server_pair.read_server.start(database=phase1_db)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            # Baseline should still be original value
+            result = read_client.eval('#0.baseline')
+            assert_moo_int(result, 100, "Baseline should be original value after SIGKILL")
+
+            # Unsaved property should not exist
+            result = read_client.eval('#0.unsaved')
+            success, _ = result
+            assert not success, "Unsaved property should not exist after SIGKILL"
         finally:
             read_client.close()
             server_pair.read_server.stop(read_instance)
