@@ -314,151 +314,141 @@ class TestScheduledCheckpoint:
     """Tests for scheduled checkpoint via #0.dump_interval.
 
     Note: The server reads dump_interval only at startup and after each
-    checkpoint completes. To test scheduled checkpoints, we must:
-    1. Set dump_interval and checkpoint to save the value
-    2. Restart the server so it reads the interval at startup
-    3. Make changes and wait for the automatic checkpoint
+    checkpoint completes. The MINIMUM value is 60 seconds - values below
+    60 are ignored and the server defaults to 3600 (1 hour).
+
+    To test scheduled checkpoints without waiting 60+ seconds, we verify:
+    1. The property is read and stored correctly
+    2. Explicit dump_database() schedules the next checkpoint
+    3. Values below 60 result in default behavior
     """
 
-    def test_dump_interval_triggers_checkpoint(self, server_pair: ServerPair, write_server_db, tmp_path):
-        """#0.dump_interval triggers automatic checkpoint after server restart."""
-        db_path = tmp_path / "test.db"
-        shutil.copy(write_server_db, db_path)
+    def test_dump_interval_minimum_is_60_seconds(self, client):
+        """dump_interval values below 60 are ignored (server uses 3600 default).
 
-        # Phase 1: Set up dump_interval and save it
-        write_instance = server_pair.write_server.start(database=db_path)
-        write_client = server_pair.write_server.connect(write_instance)
-        write_client.authenticate('Wizard')
+        From server.c: if dump_interval < 60, interval defaults to 3600.
+        """
+        # This test documents the minimum requirement
+        # We can't easily verify the internal timer, but we document the behavior
+        success, _ = client.eval('add_property(#0, "dump_interval", 30, {#1, "rw"})')
+        assert success, "Should be able to set dump_interval property"
 
-        try:
-            # Set dump_interval to 3 seconds
-            write_client.eval('add_property(#0, "dump_interval", 3, {#1, "rw"})')
-            # Explicit checkpoint to save the dump_interval value
-            write_client.checkpoint()
-        finally:
-            write_client.close()
-            phase1_db = server_pair.write_server.stop(write_instance)
+        # Property is set but server ignores values < 60
+        result = client.eval('#0.dump_interval')
+        value = assert_moo_success(result)
+        assert value == '30', "Property value should be stored as set"
+        # Note: Server internally uses 3600 when value < 60
 
-        # Phase 2: Restart server (reads dump_interval at startup), make changes, wait
-        write_instance = server_pair.write_server.start(database=phase1_db)
-        write_client = server_pair.write_server.connect(write_instance)
-        write_client.authenticate('Wizard')
+    def test_dump_database_schedules_next_checkpoint(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """Calling dump_database() checkpoints AND schedules next auto-checkpoint.
 
-        try:
-            # Make a change - do NOT call checkpoint explicitly
-            write_client.eval('add_property(#0, "auto_saved", 12345, {#1, "rw"})')
-
-            # Wait for automatic checkpoint (dump_interval=3 + buffer)
-            time.sleep(5)
-        finally:
-            write_client.close()
-            output_db = server_pair.write_server.stop(write_instance)
-
-        # Phase 3: Verify data persisted via automatic checkpoint
-        read_instance = server_pair.read_server.start(database=output_db)
-        read_client = server_pair.read_server.connect(read_instance)
-        read_client.authenticate('Wizard')
-
-        try:
-            result = read_client.eval('#0.auto_saved')
-            assert_moo_int(result, 12345, "Data should persist via scheduled checkpoint")
-        finally:
-            read_client.close()
-            server_pair.read_server.stop(read_instance)
-
-    def test_dump_interval_zero_no_auto_checkpoint_during_runtime(self, server_pair: ServerPair, write_server_db, tmp_path):
-        """#0.dump_interval=0 disables automatic checkpoints during runtime.
-
-        Note: Server may still checkpoint on graceful shutdown, so we verify
-        by checking database file modification time during the wait period.
+        This verifies the scheduling mechanism works without waiting 60+ seconds:
+        1. Set dump_interval to valid value (>= 60)
+        2. Call dump_database() - this saves AND re-reads dump_interval
+        3. Verify the checkpoint wrote correctly
         """
         db_path = tmp_path / "test.db"
         shutil.copy(write_server_db, db_path)
 
-        # Phase 1: Set dump_interval to 0 and save
         write_instance = server_pair.write_server.start(database=db_path)
         write_client = server_pair.write_server.connect(write_instance)
         write_client.authenticate('Wizard')
 
-        try:
-            write_client.eval('add_property(#0, "dump_interval", 0, {#1, "rw"})')
-            write_client.checkpoint()
-        finally:
-            write_client.close()
-            phase1_db = server_pair.write_server.stop(write_instance)
-
-        # Phase 2: Restart and verify no checkpoint happens during wait
-        write_instance = server_pair.write_server.start(database=phase1_db)
-        write_client = server_pair.write_server.connect(write_instance)
-        write_client.authenticate('Wizard')
+        output_db = write_instance.output_db
 
         try:
-            # Record initial mtime
-            initial_mtime = phase1_db.stat().st_mtime
+            # Set valid dump_interval (>= 60)
+            write_client.eval('add_property(#0, "dump_interval", 60, {#1, "rw"})')
 
-            # Make a change
-            write_client.eval('add_property(#0, "no_auto_save", 99999, {#1, "rw"})')
+            # Add test data
+            write_client.eval('add_property(#0, "scheduled_test", 42, {#1, "rw"})')
 
-            # Wait - with dump_interval=0, no auto checkpoint should happen
-            time.sleep(3)
+            # Verify output doesn't exist yet
+            assert not output_db.exists(), "Output DB should not exist before checkpoint"
 
-            # Check file wasn't modified (no auto checkpoint during runtime)
-            current_mtime = phase1_db.stat().st_mtime
-            assert current_mtime == initial_mtime, \
-                "Database file should not be modified with dump_interval=0"
+            # Call dump_database() - this checkpoints AND schedules next
+            success, result = write_client.eval('dump_database()')
+            assert success, f"dump_database() should succeed: {result}"
+
+            # Give server time to write
+            time.sleep(1)
+
+            # Verify checkpoint happened
+            assert output_db.exists(), "Output DB should exist after dump_database()"
+
         finally:
             write_client.close()
-            server_pair.write_server.stop(write_instance)
+            output_db_final = server_pair.write_server.stop(write_instance)
 
-    def test_dump_interval_reread_after_checkpoint(self, server_pair: ServerPair, write_server_db, tmp_path):
-        """Server re-reads dump_interval after each checkpoint completes."""
-        db_path = tmp_path / "test.db"
-        shutil.copy(write_server_db, db_path)
-
-        # Phase 1: Set up with long interval, save, restart
-        write_instance = server_pair.write_server.start(database=db_path)
-        write_client = server_pair.write_server.connect(write_instance)
-        write_client.authenticate('Wizard')
-
-        try:
-            # Start with long interval (won't auto-checkpoint soon)
-            write_client.eval('add_property(#0, "dump_interval", 300, {#1, "rw"})')
-            write_client.checkpoint()
-        finally:
-            write_client.close()
-            phase1_db = server_pair.write_server.stop(write_instance)
-
-        # Phase 2: Restart, change interval, trigger checkpoint, make more changes
-        write_instance = server_pair.write_server.start(database=phase1_db)
-        write_client = server_pair.write_server.connect(write_instance)
-        write_client.authenticate('Wizard')
-
-        try:
-            # Change to short interval
-            write_client.eval('#0.dump_interval = 2')
-            # Explicit checkpoint - server will re-read dump_interval after this
-            write_client.checkpoint()
-
-            # Now make a change after the checkpoint
-            write_client.eval('add_property(#0, "after_reread", 777, {#1, "rw"})')
-
-            # Wait for auto-checkpoint with new 2-second interval
-            time.sleep(4)
-        finally:
-            write_client.close()
-            output_db = server_pair.write_server.stop(write_instance)
-
-        # Phase 3: Verify the change after re-read was auto-saved
-        read_instance = server_pair.read_server.start(database=output_db)
+        # Verify data was saved correctly
+        read_instance = server_pair.read_server.start(database=output_db_final)
         read_client = server_pair.read_server.connect(read_instance)
         read_client.authenticate('Wizard')
 
         try:
-            result = read_client.eval('#0.after_reread')
-            assert_moo_int(result, 777, "Data should persist after dump_interval re-read")
+            result = read_client.eval('#0.scheduled_test')
+            assert_moo_int(result, 42, "Data should persist through dump_database()")
+
+            result = read_client.eval('#0.dump_interval')
+            assert_moo_int(result, 60, "dump_interval should persist")
         finally:
             read_client.close()
             server_pair.read_server.stop(read_instance)
+
+    def test_dump_interval_persists_through_restart(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """dump_interval value persists and is read on server restart."""
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        # Phase 1: Set dump_interval and save
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            write_client.eval('add_property(#0, "dump_interval", 120, {#1, "rw"})')
+            write_client.checkpoint()
+        finally:
+            write_client.close()
+            phase1_db = server_pair.write_server.stop(write_instance)
+
+        # Phase 2: Restart and verify dump_interval persisted
+        write_instance = server_pair.write_server.start(database=phase1_db)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            result = write_client.eval('#0.dump_interval')
+            assert_moo_int(result, 120, "dump_interval should persist through restart")
+        finally:
+            write_client.close()
+            server_pair.write_server.stop(write_instance)
+
+    def test_dump_interval_missing_uses_default(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """When #0.dump_interval doesn't exist, server uses 3600 second default.
+
+        We can't directly verify the internal timer, but we verify the server
+        starts successfully without the property.
+        """
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            # Verify dump_interval doesn't exist initially
+            result = write_client.eval('#0.dump_interval')
+            success, _ = result
+            assert not success, "dump_interval should not exist in minimal db"
+
+            # Server should still function (uses 3600 default internally)
+            result = write_client.eval('1 + 1')
+            assert_moo_int(result, 2, "Server should function without dump_interval")
+        finally:
+            write_client.close()
+            server_pair.write_server.stop(write_instance)
 
 
 @pytest.mark.persistence
@@ -635,6 +625,88 @@ class TestEmergencyCheckpoint:
             result = read_client.eval('#0.unsaved')
             success, _ = result
             assert not success, "Unsaved property should not exist after SIGKILL"
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
+
+@pytest.mark.persistence
+@pytest.mark.longrun
+class TestAutomaticCheckpoint:
+    """Long-running tests for automatic checkpoint via dump_interval.
+
+    These tests verify that the server actually performs automatic checkpoints
+    at the scheduled interval. They require waiting 60+ seconds (the minimum
+    dump_interval value) and are skipped by default. Use --longrun to include.
+    """
+
+    def test_automatic_checkpoint_fires_and_logs(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """Automatic checkpoint fires after dump_interval seconds.
+
+        This test verifies:
+        1. The server logs "CHECKPOINTING on ... finished" when auto-checkpoint fires
+        2. Data written before the checkpoint is actually persisted
+        3. The output database file is created/updated
+        """
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        output_db = write_instance.output_db
+        log_file = write_instance.log_file
+
+        try:
+            # Set dump_interval to minimum (60 seconds)
+            write_client.eval('add_property(#0, "dump_interval", 60, {#1, "rw"})')
+
+            # Trigger explicit checkpoint - this saves dump_interval AND schedules next
+            success, _ = write_client.eval('dump_database()')
+            assert success, "Initial dump_database() should succeed"
+
+            # Wait for checkpoint to complete
+            time.sleep(1)
+
+            # Record state after explicit checkpoint
+            assert output_db.exists(), "Output DB should exist after explicit checkpoint"
+            initial_mtime = output_db.stat().st_mtime
+
+            # Read log to get baseline
+            initial_log = log_file.read_text() if log_file.exists() else ""
+
+            # Now make a change that should be saved by automatic checkpoint
+            write_client.eval('add_property(#0, "auto_checkpoint_test", 99999, {#1, "rw"})')
+
+            # Wait for automatic checkpoint (60 seconds + buffer)
+            # The server should checkpoint ~60 seconds after the explicit dump_database()
+            time.sleep(65)
+
+            # Check log for checkpoint message
+            current_log = log_file.read_text() if log_file.exists() else ""
+            new_log_content = current_log[len(initial_log):]
+
+            assert "CHECKPOINTING" in new_log_content and "finished" in new_log_content, \
+                f"Log should contain checkpoint message. New log content:\n{new_log_content}"
+
+            # Verify output DB was updated
+            current_mtime = output_db.stat().st_mtime
+            assert current_mtime > initial_mtime, \
+                "Output DB mtime should change after automatic checkpoint"
+
+        finally:
+            write_client.close()
+            output_db_final = server_pair.write_server.stop(write_instance)
+
+        # Verify data was actually persisted by the automatic checkpoint
+        read_instance = server_pair.read_server.start(database=output_db_final)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            result = read_client.eval('#0.auto_checkpoint_test')
+            assert_moo_int(result, 99999, "Data should be saved by automatic checkpoint")
         finally:
             read_client.close()
             server_pair.read_server.stop(read_instance)

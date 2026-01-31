@@ -82,6 +82,12 @@ def pytest_addoption(parser):
         help="Show network transcript when a test fails"
     )
     parser.addoption(
+        "--longrun",
+        action="store_true",
+        default=False,
+        help="Include long-running tests (60+ seconds) that are skipped by default"
+    )
+    parser.addoption(
         "--candidate-features",
         action="store",
         default=None,
@@ -106,6 +112,21 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "waifs: marks tests that require Waif support"
     )
+    config.addinivalue_line(
+        "markers", "longrun: marks tests that take 60+ seconds (skipped unless --longrun)"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip longrun tests unless --longrun is specified."""
+    if config.getoption("--longrun"):
+        # --longrun given: run all tests
+        return
+
+    skip_longrun = pytest.mark.skip(reason="longrun test: use --longrun to include")
+    for item in items:
+        if "longrun" in item.keywords:
+            item.add_marker(skip_longrun)
 
 
 # ============================================================================
