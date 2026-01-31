@@ -109,13 +109,17 @@ class ServerProtocol(ABC):
 
     @abstractmethod
     def start(self, database: Path, port: Optional[int] = None,
-              work_dir: Optional[Path] = None) -> ServerInstance:
+              work_dir: Optional[Path] = None,
+              emergency_mode: bool = False) -> ServerInstance:
         """Start a server instance.
 
         Args:
             database: Path to the input database file.
             port: Port to listen on (auto-allocate if None).
             work_dir: Working directory for this instance.
+            emergency_mode: If True, start in emergency wizard mode (-e flag).
+                           In this mode, no network listener is created and
+                           commands are read from stdin.
 
         Returns:
             ServerInstance representing the running server.

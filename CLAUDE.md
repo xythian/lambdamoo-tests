@@ -129,3 +129,7 @@ All caches go to `~/.cache/lambdamoo-tests/`:
 - `databases/` - Auto-generated test databases
 
 Use `uv run lmt clean --list` to inspect, `uv run lmt clean --all` to clear.
+
+## Design Proposals
+
+Design proposals and specifications live in `docs/rfcs/`. These documents describe formats, protocols, and architectural decisions that may be implemented in the future. RFCs go through draft, review, and accepted stages before implementation.

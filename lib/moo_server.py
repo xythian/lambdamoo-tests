@@ -335,19 +335,20 @@ class MooServer(ServerProtocol):
         return False
 
     def start(self, database: Path, port: Optional[int] = None,
-              work_dir: Optional[Path] = None) -> MooServerInstance:
+              work_dir: Optional[Path] = None,
+              emergency_mode: bool = False) -> MooServerInstance:
         """Start a LambdaMOO server instance.
 
         If port is not specified, uses ephemeral port assignment (port 0)
         which lets the OS assign an available port atomically, avoiding
         race conditions.
+
+        If emergency_mode is True, starts with -e flag for emergency wizard mode.
+        In this mode, there is no network listener and commands are read from stdin.
         """
         database = Path(database).resolve()
         if not database.exists():
             raise FileNotFoundError(f"Database not found: {database}")
-
-        # Use ephemeral port (0) by default - OS assigns atomically
-        requested_port = port if port is not None else 0
 
         # Create unique instance directory
         self._instance_counter += 1
@@ -362,37 +363,50 @@ class MooServer(ServerProtocol):
         log_file = instance_dir / "server.log"
 
         # Build command line
-        cmd = [
-            str(self.config.binary),
-            '-l', str(log_file),
-            str(input_db),
-            str(output_db),
-            '-p', str(requested_port),
-        ]
+        cmd = [str(self.config.binary)]
+
+        if emergency_mode:
+            cmd.append('-e')
+
+        cmd.extend(['-l', str(log_file), str(input_db), str(output_db)])
+
+        if not emergency_mode:
+            # Use ephemeral port (0) by default - OS assigns atomically
+            requested_port = port if port is not None else 0
+            cmd.extend(['-p', str(requested_port)])
 
         # Start the server
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            cwd=str(instance_dir),
-        )
-
-        # Wait for server to log its actual listening port
-        actual_port = self._wait_for_listen_port(log_file)
-        if actual_port is None:
-            # Server failed to start
-            process.terminate()
-            try:
-                process.wait(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            log_contents = log_file.read_text() if log_file.exists() else "(no log)"
-            raise RuntimeError(
-                f"Server failed to start - could not bind to port.\n"
-                f"Log contents:\n{log_contents}"
+        if emergency_mode:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(instance_dir),
             )
+            actual_port = 0  # No network listener in emergency mode
+        else:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(instance_dir),
+            )
+            # Wait for server to log its actual listening port
+            actual_port = self._wait_for_listen_port(log_file)
+            if actual_port is None:
+                # Server failed to start
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                log_contents = log_file.read_text() if log_file.exists() else "(no log)"
+                raise RuntimeError(
+                    f"Server failed to start - could not bind to port.\n"
+                    f"Log contents:\n{log_contents}"
+                )
 
         instance = MooServerInstance(
             config=self.config,
@@ -404,14 +418,15 @@ class MooServer(ServerProtocol):
             log_file=log_file,
         )
 
-        # Verify we can actually connect
-        if not self._wait_for_ready(actual_port):
-            self.stop(instance)
-            log_contents = instance.get_log_contents()
-            raise RuntimeError(
-                f"Server failed to start within timeout.\n"
-                f"Log contents:\n{log_contents}"
-            )
+        # Verify we can actually connect (skip for emergency mode)
+        if not emergency_mode:
+            if not self._wait_for_ready(actual_port):
+                self.stop(instance)
+                log_contents = instance.get_log_contents()
+                raise RuntimeError(
+                    f"Server failed to start within timeout.\n"
+                    f"Log contents:\n{log_contents}"
+                )
 
         self._instances.append(instance)
         return instance
@@ -474,6 +489,51 @@ class MooServer(ServerProtocol):
         """Stop all running server instances."""
         for instance in list(self._instances):
             self.stop(instance)
+
+    def run_emergency(self, database: Path, commands: str,
+                      work_dir: Optional[Path] = None,
+                      timeout: float = 30.0) -> tuple:
+        """Run server in emergency mode with stdin commands.
+
+        This starts the server with the -e flag, sends commands via stdin,
+        waits for the server to exit, and returns the output.
+
+        Args:
+            database: Path to the input database file.
+            commands: Commands to send to the server via stdin.
+            work_dir: Working directory for this instance.
+            timeout: Maximum time to wait for the server to exit.
+
+        Returns:
+            Tuple of (stdout_output, output_database_path).
+
+        Raises:
+            RuntimeError: If server fails to start or times out.
+        """
+        instance = self.start(database, work_dir=work_dir, emergency_mode=True)
+
+        try:
+            # Send commands and close stdin to signal end of input
+            stdout_data, _ = instance.process.communicate(
+                input=commands.encode('utf-8'),
+                timeout=timeout
+            )
+            stdout_output = stdout_data.decode('utf-8', errors='replace')
+        except subprocess.TimeoutExpired:
+            instance.process.kill()
+            instance.process.wait()
+            raise RuntimeError(f"Emergency mode timed out after {timeout}s")
+        finally:
+            if instance in self._instances:
+                self._instances.remove(instance)
+
+        # Wait for filesystem to sync
+        for _ in range(10):
+            if instance.output_db.exists():
+                break
+            time.sleep(0.1)
+
+        return stdout_output, instance.output_db
 
     def __enter__(self):
         return self

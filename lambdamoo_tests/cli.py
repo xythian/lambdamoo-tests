@@ -193,6 +193,88 @@ Examples:
     return parser
 
 
+def add_roundtrip_parser(subparsers):
+    """Add the 'roundtrip' subcommand parser."""
+    parser = subparsers.add_parser(
+        'roundtrip',
+        help='Load a database, checkpoint, and verify output',
+        description='Test database round-trip (load -> checkpoint -> compare)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic round trip with a built binary
+  lmt roundtrip --database /path/to/production.db --build lambdamoo
+
+  # Round trip with explicit binary
+  lmt roundtrip --database /path/to/production.db --candidate ./moo
+
+  # Round trip and verify output matches
+  lmt roundtrip --database /path/to/production.db --build lambdamoo --verify
+
+  # Keep temporary files for inspection
+  lmt roundtrip --database /path/to/production.db --build lambdamoo --keep-artifacts
+
+  # Specify output location
+  lmt roundtrip --database /path/to/production.db --build lambdamoo --output ./output.db
+"""
+    )
+
+    parser.add_argument(
+        "--database", "-d",
+        type=Path,
+        required=True,
+        help="Path to the database to test"
+    )
+
+    candidate_group = parser.add_mutually_exclusive_group()
+    candidate_group.add_argument(
+        "--candidate",
+        type=Path,
+        help="Path to the MOO server binary"
+    )
+    candidate_group.add_argument(
+        "--build", "-b",
+        dest="build_spec",
+        metavar="SPEC",
+        help="Build server from repo, repo:config, or repo:ref:config"
+    )
+
+    parser.add_argument(
+        "--output", "-o",
+        type=Path,
+        help="Path for output database (default: temp directory)"
+    )
+    parser.add_argument(
+        "--verify", "-V",
+        action="store_true",
+        help="Compare input and output databases, report differences"
+    )
+    parser.add_argument(
+        "--keep-artifacts",
+        action="store_true",
+        help="Keep temporary files after run"
+    )
+    parser.add_argument(
+        "--use-emergency-mode",
+        action="store_true",
+        help="Use emergency mode (-e) instead of network mode"
+    )
+    parser.add_argument(
+        "--sanity-check",
+        action="store_true",
+        default=True,
+        help="Run basic sanity checks after loading (default: True)"
+    )
+    parser.add_argument(
+        "--no-sanity-check",
+        action="store_false",
+        dest="sanity_check",
+        help="Skip sanity checks"
+    )
+
+    return parser
+
+
 def add_test_parser(subparsers):
     """Add the 'test' subcommand parser."""
     parser = subparsers.add_parser(
@@ -664,6 +746,147 @@ def resolve_or_build(repo: str, ref: str, config: str, name: str = None) -> tupl
     return (name, binary, known_features)
 
 
+def cmd_roundtrip(args):
+    """Execute the roundtrip command."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from lib.protocol import ServerConfig
+    from lib.moo_server import MooServer
+
+    # Validate input database exists
+    if not args.database.exists():
+        print(f"Error: Database not found: {args.database}", file=sys.stderr)
+        return 1
+
+    # Resolve the server binary
+    candidate_binary = None
+
+    if args.candidate:
+        candidate_binary = args.candidate
+        if not candidate_binary.exists():
+            print(f"Error: Candidate binary not found: {candidate_binary}", file=sys.stderr)
+            return 1
+    elif args.build_spec:
+        try:
+            name, repo, ref, config = parse_build_spec(args.build_spec)
+            _, candidate_binary, _ = resolve_or_build(repo, ref, config, name)
+        except Exception as e:
+            print(f"Error building server: {e}", file=sys.stderr)
+            return 1
+    else:
+        # Try to find a default binary
+        from harness.config import get_config
+        config = get_config()
+        if config.moo_binary and config.moo_binary.exists():
+            candidate_binary = config.moo_binary
+        else:
+            print("Error: Must specify --candidate or --build", file=sys.stderr)
+            return 1
+
+    print(f"Database:  {args.database}")
+    print(f"Binary:    {candidate_binary}")
+
+    # Set up working directory
+    work_dir = None
+    if not args.keep_artifacts:
+        work_dir = Path(tempfile.mkdtemp(prefix='moo_roundtrip_'))
+    else:
+        work_dir = Path(tempfile.mkdtemp(prefix='moo_roundtrip_'))
+        print(f"Work dir:  {work_dir}")
+
+    try:
+        server_config = ServerConfig(binary=candidate_binary, name="roundtrip")
+        server = MooServer(server_config, work_dir)
+
+        if args.use_emergency_mode:
+            print("\nUsing emergency mode...")
+            commands = ""
+            if args.sanity_check:
+                commands += ";valid(#0)\n"
+                commands += ";valid(#1)\n"
+            commands += ";dump_database()\n"
+
+            output, output_db = server.run_emergency(args.database, commands)
+            print(f"Server output:\n{output}")
+        else:
+            print("\nStarting server...")
+            instance = server.start(database=args.database)
+
+            try:
+                client = server.connect(instance)
+                client.authenticate('Wizard')
+
+                if args.sanity_check:
+                    print("Running sanity checks...")
+                    success, result = client.eval('valid(#0)')
+                    if not success or result != '1':
+                        print(f"  Warning: #0 validity check: {result}")
+                    else:
+                        print("  #0 is valid")
+
+                    success, result = client.eval('valid(#1)')
+                    if not success or result != '1':
+                        print(f"  Warning: #1 validity check: {result}")
+                    else:
+                        print("  #1 is valid")
+
+                print("Checkpointing database...")
+                success = client.checkpoint()
+                if not success:
+                    print("Warning: dump_database() returned failure", file=sys.stderr)
+
+                client.close()
+            finally:
+                output_db = server.stop(instance)
+
+        print(f"\nOutput DB: {output_db}")
+
+        # Copy to specified output location if requested
+        final_output = output_db
+        if args.output:
+            shutil.copy(output_db, args.output)
+            final_output = args.output
+            print(f"Copied to: {final_output}")
+
+        # Verify if requested
+        if args.verify:
+            print("\nVerifying databases...")
+            input_size = args.database.stat().st_size
+            output_size = output_db.stat().st_size
+
+            print(f"  Input size:  {input_size:,} bytes")
+            print(f"  Output size: {output_size:,} bytes")
+
+            if input_size == output_size:
+                # Check for binary equality
+                with open(args.database, 'rb') as f1, open(output_db, 'rb') as f2:
+                    input_data = f1.read()
+                    output_data = f2.read()
+
+                if input_data == output_data:
+                    print("  Result: IDENTICAL")
+                else:
+                    # Find first difference
+                    for i, (b1, b2) in enumerate(zip(input_data, output_data)):
+                        if b1 != b2:
+                            print(f"  Result: DIFFERENT (first diff at byte {i})")
+                            break
+            else:
+                print(f"  Result: DIFFERENT (size mismatch: {input_size} vs {output_size})")
+
+        print("\nRound trip complete.")
+        return 0
+
+    except Exception as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        return 1
+    finally:
+        if not args.keep_artifacts and work_dir and work_dir.exists():
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def cmd_test(args):
     """Execute the test command."""
     import subprocess
@@ -796,6 +1019,7 @@ Environment Variables:
     add_setup_parser(subparsers)
     add_clean_parser(subparsers)
     add_test_parser(subparsers)
+    add_roundtrip_parser(subparsers)
 
     # Parse arguments
     args = parser.parse_args()
@@ -819,6 +1043,7 @@ Environment Variables:
         'setup': cmd_setup,
         'clean': cmd_clean,
         'test': cmd_test,
+        'roundtrip': cmd_roundtrip,
     }
 
     handler = handlers.get(args.command)
