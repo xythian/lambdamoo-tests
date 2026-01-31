@@ -462,6 +462,92 @@ class TestScheduledCheckpoint:
 
 
 @pytest.mark.persistence
+class TestCheckpointWithNetworkIO:
+    """Tests for checkpoint during active network connections."""
+
+    def test_checkpoint_with_active_connection(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """Checkpoint succeeds while client connection is active."""
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            # Make changes
+            write_client.eval('add_property(#0, "active_conn_test", 111, {#1, "rw"})')
+
+            # Checkpoint while connection is active
+            success = write_client.checkpoint()
+            assert success, "Checkpoint should succeed with active connection"
+
+            # Connection should still work after checkpoint
+            result = write_client.eval('1 + 1')
+            assert_moo_int(result, 2, "Client should work after checkpoint")
+
+            # Make more changes after checkpoint
+            write_client.eval('#0.active_conn_test = 222')
+            success = write_client.checkpoint()
+            assert success, "Second checkpoint should also succeed"
+
+        finally:
+            write_client.close()
+            output_db = server_pair.write_server.stop(write_instance)
+
+        # Verify data persisted
+        read_instance = server_pair.read_server.start(database=output_db)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            result = read_client.eval('#0.active_conn_test')
+            assert_moo_int(result, 222, "Latest data should persist through checkpoints")
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
+    def test_checkpoint_during_output(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """Checkpoint during large output doesn't corrupt data."""
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            # Store test data
+            write_client.eval('add_property(#0, "output_test", 222, {#1, "rw"})')
+
+            # Generate large output while checkpointing
+            # Create a verb that produces lots of output
+            write_client.eval('add_verb(#0, {#1, "rx", "big_output"}, {"this", "none", "this"})')
+            write_client.eval('set_verb_code(#0, "big_output", {"for i in [1..100]", "  player:tell(tostr(i));", "endfor", "return 1;"})')
+
+            # Start the big output, then checkpoint
+            write_client.eval('#0:big_output()')
+            success = write_client.checkpoint()
+            assert success, "Checkpoint should succeed during output"
+
+        finally:
+            write_client.close()
+            output_db = server_pair.write_server.stop(write_instance)
+
+        # Verify data integrity
+        read_instance = server_pair.read_server.start(database=output_db)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            result = read_client.eval('#0.output_test')
+            assert_moo_int(result, 222, "Data should persist through checkpoint during output")
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
+
+@pytest.mark.persistence
 class TestEmergencyCheckpoint:
     """Tests for checkpoint behavior on shutdown signals."""
 
