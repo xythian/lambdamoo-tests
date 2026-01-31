@@ -3,8 +3,8 @@
 ## Checkpointing
 
 - [x] Basic checkpoint functionality (`dump_database()`)
-- [ ] Checkpoint scheduling (`set_checkpoint_interval()`, automatic checkpoints)
-- [ ] Checkpoint during active tasks (verify tasks survive)
+- [x] Checkpoint scheduling (`#0.dump_interval`, automatic checkpoints)
+- [x] Checkpoint during active tasks (verify tasks survive) - see test_tasks.py
 - [ ] Checkpoint with pending network I/O
 - [ ] Emergency checkpoint on shutdown signals
 - [x] Checkpoint file integrity verification
