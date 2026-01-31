@@ -22,26 +22,38 @@ class TestNetworkConnections:
         assert not success
         # Should error because #0 is not connected
 
-    def test_connection_options(self, client):
+    def test_connection_options(self, multiplayer_server, candidate_server):
         """Test getting and setting connection options."""
-        # Test a common option like "hold-input" or "binary" if supported.
-        # Standard LambdaMOO might not have many options enabled by default or documented consistently across versions.
-        # "binary" is a common one.
+        # We use a separate victim connection because setting "binary" on the
+        # control connection might break the command parser/protocol.
 
-        # set_connection_option(conn, option, value)
-        # connection_option(conn, option)
+        # Connect Admin (Wizard)
+        admin = candidate_server.connect(multiplayer_server)
+        admin.authenticate('Wizard')
 
-        # Let's try to set 'binary' to 0 (default) then 1
-        client.eval('set_connection_option(player, "binary", 0)')
-        result = client.eval_expect_success('connection_option(player, "binary")')
-        assert result == '0'
+        # Connect Victim (Player2, #4)
+        victim = candidate_server.connect(multiplayer_server)
+        victim.authenticate('Player2')
 
-        client.eval('set_connection_option(player, "binary", 1)')
-        result = client.eval_expect_success('connection_option(player, "binary")')
-        assert result == '1'
+        try:
+            # Set 'binary' to 0 (ensure default) on #4
+            admin.eval('set_connection_option(#4, "binary", 0)')
+            result = admin.eval_expect_success('connection_option(#4, "binary")')
+            assert result == '0'
 
-        # Clean up
-        client.eval('set_connection_option(player, "binary", 0)')
+            # Set 'binary' to 1 on #4
+            admin.eval('set_connection_option(#4, "binary", 1)')
+            result = admin.eval_expect_success('connection_option(#4, "binary")')
+            assert result == '1'
+
+            # Clean up - set back to 0
+            admin.eval('set_connection_option(#4, "binary", 0)')
+            result = admin.eval_expect_success('connection_option(#4, "binary")')
+            assert result == '0'
+
+        finally:
+            admin.close()
+            victim.close()
 
     def test_connection_option_invalid(self, client):
         """Test connection_option() with invalid option."""
