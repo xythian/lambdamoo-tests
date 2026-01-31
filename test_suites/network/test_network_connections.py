@@ -123,7 +123,10 @@ class TestNetworkConnections:
         """Test read() function."""
         # Create a verb that reads input
         client.eval_expect_success('add_verb(#0, {#1, "xd", "do_read"}, {"this", "none", "this"})')
-        client.eval_expect_success('set_verb_code(#0, "do_read", {"return read();"})')
+
+        # set_verb_code returns a list of error strings on failure
+        result = client.eval_expect_success('set_verb_code(#0, "do_read", {"return read();"})')
+        assert result == '1', f"Failed to compile verb: {result}"
 
         # Send command to call the verb
         # This will suspend waiting for input
