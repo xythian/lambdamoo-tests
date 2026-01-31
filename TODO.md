@@ -20,14 +20,14 @@
 
 ## Network - Connections
 
-- [ ] `connection_name()` - get connection identifier
-- [ ] `connection_option()` / `set_connection_option()` - connection settings
-- [ ] `connected_players()` / `connected_seconds()` / `idle_seconds()`
-- [ ] `notify()` - send output to connection
-- [ ] `read()` - read input from connection
-- [ ] `force_input()` - inject input into connection
-- [ ] `boot_player()` - disconnect a player
-- [ ] `open_network_connection()` - outbound connections (if enabled)
+- [x] `connection_name()` - get connection identifier
+- [x] `connection_option()` / `set_connection_option()` - connection settings
+- [x] `connected_players()` / `connected_seconds()` / `idle_seconds()`
+- [x] `notify()` - send output to connection
+- [x] `read()` - read input from connection
+- [x] `force_input()` - inject input into connection
+- [x] `boot_player()` - disconnect a player
+- [x] `open_network_connection()` - outbound connections (if enabled)
 
 ## Network - Buffering and Binary I/O
 
