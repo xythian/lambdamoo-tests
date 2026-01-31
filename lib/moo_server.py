@@ -250,6 +250,25 @@ class MooClient(ClientProtocol):
         # Couldn't parse - return raw response as failure
         return False, response.strip() if response.strip() else "(no response)"
 
+    def eval_expect_success(self, expression: str, timeout: Optional[float] = None) -> str:
+        """
+        Evaluate an expression, raising an exception on failure.
+
+        Args:
+            expression: The MOO expression to evaluate.
+            timeout: Timeout for the operation.
+
+        Returns:
+            The result value.
+
+        Raises:
+            AssertionError: If the evaluation failed.
+        """
+        success, result = self.eval(expression, timeout)
+        if not success:
+            raise AssertionError(f"MOO evaluation failed: {result}")
+        return result
+
     def checkpoint(self) -> bool:
         """Request a database checkpoint."""
         success, _ = self.eval('dump_database()')

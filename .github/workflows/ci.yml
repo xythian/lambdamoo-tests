@@ -1,0 +1,39 @@
+name: LambdaMOO Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Build and Test (Full Config)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gperf bison byacc autoconf make gcc libpcre3-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Build LambdaMOO (Full)
+      run: |
+        uv run python -m lambdamoo_tests.cli build --repo lambdamoo --config full --output ./builds/
+
+    - name: Run Tests
+      run: |
+        # Run tests against the built binary
+        # We skip upgrade tests for now as requested
+        uv run python -m lambdamoo_tests.cli test --candidate ./builds/moo -m "not upgrade"
