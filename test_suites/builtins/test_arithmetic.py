@@ -198,3 +198,38 @@ class TestLargeNumbers:
         # Near 64-bit limit
         result = client.eval('9000000000000000000 + 1')
         assert_moo_int(result, 9000000000000000001)
+
+
+class TestMinIntDivision:
+    """Dividing the most negative integer by -1 must not raise SIGFPE.
+
+    The mathematically correct quotient (NUM_MAX + 1) is unrepresentable, so
+    the server returns the wrapped two's complement value, NUM_MIN itself.
+    """
+
+    @staticmethod
+    def _min_int(detected_features):
+        """MIN_INT as (literal_expression, value).
+
+        MIN_INT has no direct literal form: its magnitude is one greater than
+        MAX_INT, so it is written as MIN_INT+1 minus one.
+        """
+        bits = 64 if detected_features.has_i64 else 32
+        value = -(2 ** (bits - 1))
+        return f'({value + 1} - 1)', value
+
+    def test_arith_042_min_int_divided_by_negative_one(self, client, detected_features):
+        """ARITH-042: MIN_INT / -1 wraps to MIN_INT instead of crashing."""
+        expr, value = self._min_int(detected_features)
+        result = client.eval(f'{expr} / -1')
+        assert_moo_int(result, value)
+
+        assert_moo_int(client.eval('1 + 1'), 2)  # server survived
+
+    def test_arith_043_min_int_modulo_negative_one(self, client, detected_features):
+        """ARITH-043: MIN_INT % -1 is 0 instead of crashing."""
+        expr, _ = self._min_int(detected_features)
+        result = client.eval(f'{expr} % -1')
+        assert_moo_int(result, 0)
+
+        assert_moo_int(client.eval('1 + 1'), 2)  # server survived
