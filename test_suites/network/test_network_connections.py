@@ -122,15 +122,17 @@ class TestNetworkConnections:
     def test_read(self, client):
         """Test read() function."""
         # Create a verb that reads input
-        client.eval_expect_success('add_verb(#0, {#1, "xd", "do_read"}, {"this", "none", "this"})')
+        # read() requires wizard permissions, so the verb must be owned by the wizard
+        client.eval_expect_success('add_verb(#0, {player, "xd", "do_read"}, {"this", "none", "this"})')
 
-        # set_verb_code returns a list of error strings on failure
+        # set_verb_code returns a list of error strings; empty list means success
         result = client.eval_expect_success('set_verb_code(#0, "do_read", {"return read();"})')
-        assert result == '1', f"Failed to compile verb: {result}"
+        assert result == '{}', f"Failed to compile verb: {result}"
 
-        # Send command to call the verb
-        # This will suspend waiting for input
-        client.send(';return #0:do_read()')
+        # Send command to call the verb; this will suspend waiting for input.
+        # The test db's do_command wraps `;` input as "return <expr>;", so this
+        # must be a bare expression.
+        client.send(';#0:do_read()')
 
         # Wait a bit to ensure server is ready to read
         time.sleep(0.2)
