@@ -181,6 +181,12 @@ class TestScatterAssignment:
         value = assert_moo_success(result)
         assert value == '{1}'
 
+    def test_list_033_scatter_rest_captures_single_element(self, client):
+        """LIST-033: A rest target captures a one-element list."""
+        result = client.eval('({first, @rest} = {1, 2}) && rest')
+        value = assert_moo_success(result)
+        assert value == '{2}'
+
 
 class TestListErrors:
     """Tests for list error conditions."""
