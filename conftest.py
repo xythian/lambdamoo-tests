@@ -657,6 +657,13 @@ def requires_bitwise(detected_features):
         pytest.skip("Test requires BITWISE_OPERATORS support")
 
 
+@pytest.fixture
+def requires_regexp(detected_features):
+    """Skip if the regular-expression extension is not enabled."""
+    if not detected_features.has_regexp:
+        pytest.skip("Test requires regexp support")
+
+
 # ============================================================================
 # Tracing and Debugging
 # ============================================================================

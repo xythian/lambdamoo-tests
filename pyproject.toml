@@ -69,6 +69,7 @@ python_functions = "test_*"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "unicode: marks tests that require Unicode support",
+    "regexp: marks tests that require regular-expression support",
     "waifs: marks tests that require WAIF support",
     "xml: marks tests that require XML support",
     "upgrade: marks database upgrade tests",

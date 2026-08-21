@@ -63,21 +63,22 @@ class MooClient:
         """Read a single line from the socket (up to and including newline)."""
         timeout = timeout or self.timeout
         self._socket.settimeout(timeout)
-        data = []
+        data = bytearray()
         try:
             while True:
                 chunk = self._socket.recv(1)
                 if not chunk:
                     break
-                char = chunk.decode('utf-8', errors='replace')
-                data.append(char)
-                if char == '\n':
+                data.extend(chunk)
+                if chunk == b'\n':
                     break
         except socket.timeout:
             pass
         finally:
             self._socket.settimeout(self.timeout)
-        return ''.join(data)
+        # Decode only after collecting the line.  Decoding each recv(1) byte
+        # separately corrupts every multibyte UTF-8 character.
+        return data.decode('utf-8', errors='replace')
 
     def _read_available(self, timeout: float = 0.05) -> str:
         """Read any immediately available data without blocking long."""

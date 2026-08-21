@@ -141,21 +141,22 @@ class MooClient(ClientProtocol):
         """Read a single line from the socket."""
         timeout = timeout or self.timeout
         self._socket.settimeout(timeout)
-        data = []
+        data = bytearray()
         try:
             while True:
                 chunk = self._socket.recv(1)
                 if not chunk:
                     break
-                char = chunk.decode('utf-8', errors='replace')
-                data.append(char)
-                if char == '\n':
+                data.extend(chunk)
+                if chunk == b'\n':
                     break
         except socket.timeout:
             pass
         finally:
             self._socket.settimeout(self.timeout)
-        result = ''.join(data)
+        # A Unicode codepoint commonly spans several recv(1) calls.  Decode
+        # the completed line so partial UTF-8 sequences are not replaced.
+        result = data.decode('utf-8', errors='replace')
         if result:
             self._log_trace('RECV', result)
         return result
