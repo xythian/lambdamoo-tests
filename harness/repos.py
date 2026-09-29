@@ -20,7 +20,7 @@ KNOWN_REPOS: Dict[str, str] = {
 # Default branches for known repos (used as fallback, actual default detected from remote)
 DEFAULT_BRANCHES: Dict[str, str] = {
     "lambdamoo": "main",  # wrog/lambdamoo uses main
-    "wp-lambdamoo": "waterpoint-190",
+    "wp-lambdamoo": "waterpoint",
     "wp-lambdamoo-unicode": "waterpoint-unicode",
 }
 

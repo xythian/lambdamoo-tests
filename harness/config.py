@@ -190,7 +190,7 @@ class Config:
         if "wp-lambdamoo" not in self.repos:
             self.repos["wp-lambdamoo"] = RepoConfig(
                 url="https://github.com/xythian/wp-lambdamoo",
-                default_branch="waterpoint-190",
+                default_branch="waterpoint",
                 default_build_config="waterpoint",
             )
         if "wp-lambdamoo-unicode" not in self.repos:
@@ -415,7 +415,7 @@ default_branch = "main"
 
 [repos.wp-lambdamoo]
 url = "https://github.com/xythian/wp-lambdamoo"
-default_branch = "waterpoint-190"
+default_branch = "waterpoint"
 default_build_config = "waterpoint"
 
 [repos.wp-lambdamoo-unicode]
