@@ -29,6 +29,12 @@
 - [x] `boot_player()` - disconnect a player
 - [x] `open_network_connection()` - outbound connections (if enabled)
 
+## Network - Robustness and Command-Line Switches
+
+- [x] Listener and connection descriptors closed out from under the server
+- [x] Persistent `select()`/`poll()` failure doesn't spin or flood the log
+- [x] `+N`/`-N` DNS lookup switch (inbound names, outbound host names)
+
 ## Network - Buffering and Binary I/O
 
 - [ ] Output buffering behavior

@@ -9,7 +9,7 @@ same test code.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, List
 
 
 @dataclass
@@ -110,7 +110,9 @@ class ServerProtocol(ABC):
     @abstractmethod
     def start(self, database: Path, port: Optional[int] = None,
               work_dir: Optional[Path] = None,
-              emergency_mode: bool = False) -> ServerInstance:
+              emergency_mode: bool = False,
+              extra_args: Optional[List[str]] = None,
+              env: Optional[Dict[str, str]] = None) -> ServerInstance:
         """Start a server instance.
 
         Args:
@@ -120,6 +122,9 @@ class ServerProtocol(ABC):
             emergency_mode: If True, start in emergency wizard mode (-e flag).
                            In this mode, no network listener is created and
                            commands are read from stdin.
+            extra_args: Additional server command-line arguments, placed
+                        after the database files and before the port.
+            env: Environment variables to add to the server's environment.
 
         Returns:
             ServerInstance representing the running server.

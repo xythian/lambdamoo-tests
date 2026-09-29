@@ -348,7 +348,8 @@ lambdamoo-tests/
 │   ├── moo_server.py       # MOO server management
 │   ├── client.py           # MOO network client
 │   ├── assertions.py       # Custom assertions
-│   └── features.py         # Feature detection
+│   ├── features.py         # Feature detection
+│   └── fault_shim.{c,py}   # LD_PRELOAD fault injection (network robustness tests)
 └── test_suites/
     ├── network/            # Network layer tests
     ├── database/           # Database persistence tests
@@ -361,7 +362,10 @@ lambdamoo-tests/
 
 ### Network Tests (`test_suites/network/`)
 Validate TCP connection handling, line buffering, multiple connections,
-and output ordering.
+and output ordering. Also covers command-line network switches (e.g. `+N`/`-N`
+for DNS lookups, detected from the server's usage message) and, on Linux,
+recovery from injected descriptor and `select()`/`poll()` failures using an
+LD_PRELOAD shim compiled at test time.
 
 ### Database Tests (`test_suites/database/`)
 Validate object creation, destruction, hierarchy, properties, and verbs.
