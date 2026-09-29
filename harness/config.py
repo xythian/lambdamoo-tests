@@ -113,12 +113,15 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
 class RepoConfig:
     """Configuration for a known repository."""
     url: str
-    default_branch: str = "master"
+    # Branch to build when no ref is given; empty means the remote's default
+    default_branch: str = ""
     configure_flags: str = ""
-    # Default build config name for this repo (if any)
+    # Build config to use when neither --config nor --configure-flags is given
     default_build_config: str = ""
     # Custom build script (relative to repo root), if any
     build_script: str = ""
+    # Extra environment variables for the build (configure/make or build_script)
+    build_env: Dict[str, str] = field(default_factory=dict)
     # Known features for repos that don't report them via server_version
     # List of: i64, unicode, xml, waifs, waif_dict
     known_features: List[str] = field(default_factory=list)
@@ -187,10 +190,19 @@ class Config:
         if "wp-lambdamoo" not in self.repos:
             self.repos["wp-lambdamoo"] = RepoConfig(
                 url="https://github.com/xythian/wp-lambdamoo",
-                default_branch="main",
-                default_build_config="waterpoint",  # Single config
-                build_script="build.sh",  # Custom build script
-                # wp-lambdamoo doesn't report features via server_version
+                default_branch="waterpoint-190",
+                default_build_config="waterpoint",
+            )
+        if "wp-lambdamoo-unicode" not in self.repos:
+            # The older waterpoint-unicode branch, built with its own build.sh.
+            # Its bundled expat doesn't compile as C23 (gcc 15's default), and
+            # only a make command-line variable reaches its sub-make.
+            self.repos["wp-lambdamoo-unicode"] = RepoConfig(
+                url="https://github.com/xythian/wp-lambdamoo",
+                default_branch="waterpoint-unicode",
+                build_script="build.sh",
+                build_env={"MAKEFLAGS": "CC=gcc\\ -std=gnu89"},
+                # This branch doesn't report features via server_version
                 known_features=["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"],
             )
 
@@ -237,8 +249,12 @@ def _parse_repos(repos_dict: Dict[str, Any]) -> Dict[str, RepoConfig]:
         elif isinstance(info, dict):
             result[name] = RepoConfig(
                 url=info.get("url", ""),
-                default_branch=info.get("default_branch", "master"),
+                default_branch=info.get("default_branch", ""),
                 configure_flags=info.get("configure_flags", ""),
+                default_build_config=info.get("default_build_config", ""),
+                build_script=info.get("build_script", ""),
+                build_env=dict(info.get("build_env", {})),
+                known_features=list(info.get("known_features", [])),
             )
     return result
 
@@ -399,8 +415,15 @@ default_branch = "main"
 
 [repos.wp-lambdamoo]
 url = "https://github.com/xythian/wp-lambdamoo"
-default_branch = "main"
+default_branch = "waterpoint-190"
 default_build_config = "waterpoint"
+
+[repos.wp-lambdamoo-unicode]
+url = "https://github.com/xythian/wp-lambdamoo"
+default_branch = "waterpoint-unicode"
+build_script = "build.sh"
+build_env = { MAKEFLAGS = 'CC=gcc\ -std=gnu89' }
+known_features = ["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"]
 
 # Add custom repos like this:
 # [repos.my-fork]

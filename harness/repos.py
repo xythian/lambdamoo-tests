@@ -14,12 +14,14 @@ from dataclasses import dataclass
 KNOWN_REPOS: Dict[str, str] = {
     "lambdamoo": "https://github.com/wrog/lambdamoo",
     "wp-lambdamoo": "https://github.com/xythian/wp-lambdamoo",
+    "wp-lambdamoo-unicode": "https://github.com/xythian/wp-lambdamoo",
 }
 
 # Default branches for known repos (used as fallback, actual default detected from remote)
 DEFAULT_BRANCHES: Dict[str, str] = {
     "lambdamoo": "main",  # wrog/lambdamoo uses main
-    "wp-lambdamoo": "main",
+    "wp-lambdamoo": "waterpoint-190",
+    "wp-lambdamoo-unicode": "waterpoint-unicode",
 }
 
 
@@ -133,7 +135,14 @@ def checkout_ref(repo_path: Path, ref: str) -> None:
     """
     repo_path = Path(repo_path)
     print(f"Checking out {ref}...")
-    run_git(["checkout", ref], cwd=repo_path)
+    # Prefer the just-fetched remote branch: a local branch of the same name
+    # in the cache is left over from an earlier build and may be stale.
+    remote_ref = f"origin/{ref}"
+    if run_git(["rev-parse", "--verify", "--quiet", f"refs/remotes/{remote_ref}"],
+               cwd=repo_path, check=False).returncode == 0:
+        run_git(["checkout", "--detach", remote_ref], cwd=repo_path)
+    else:
+        run_git(["checkout", ref], cwd=repo_path)
 
 
 def get_current_ref(repo_path: Path) -> str:

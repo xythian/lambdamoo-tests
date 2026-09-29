@@ -36,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 from .config import get_config, Config, get_build_config, list_build_configs, PREDEFINED_BUILD_CONFIGS, RepoConfig
 from .repos import (
@@ -150,6 +150,7 @@ def build_with_script(
     output_dir: Path,
     build_script: str,
     make_jobs: int = 4,
+    build_env: Optional[Dict[str, str]] = None,
 ) -> Path:
     """Build MOO server using a custom build script.
 
@@ -158,6 +159,7 @@ def build_with_script(
         output_dir: Where to put the built binary.
         build_script: Path to build script (relative to source_dir).
         make_jobs: Number of parallel make jobs.
+        build_env: Extra environment variables for the script.
 
     Returns:
         Path to the built binary.
@@ -174,7 +176,7 @@ def build_with_script(
     script_path.chmod(0o755)
 
     print(f"Running build script: {build_script}")
-    env = dict(os.environ)
+    env = {**os.environ, **(build_env or {})}
     env['MAKE_JOBS'] = str(make_jobs)
 
     result = run_cmd([str(script_path)], cwd=source_dir, env=env)
@@ -210,6 +212,7 @@ def build_from_source(
     make_jobs: int = 4,
     clean: bool = False,
     build_script: str = "",
+    build_env: Optional[Dict[str, str]] = None,
 ) -> Path:
     """Build MOO server from a source directory.
 
@@ -220,6 +223,7 @@ def build_from_source(
         make_jobs: Number of parallel make jobs.
         clean: If True, run make clean first.
         build_script: Custom build script to use instead of configure/make.
+        build_env: Extra environment variables for the build.
 
     Returns:
         Path to the built binary.
@@ -230,7 +234,9 @@ def build_from_source(
 
     # Use custom build script if specified
     if build_script:
-        return build_with_script(source_dir, output_dir, build_script, make_jobs)
+        return build_with_script(source_dir, output_dir, build_script, make_jobs, build_env)
+
+    env = {**os.environ, **build_env} if build_env else None
 
     # Standard autoconf/configure/make build
     # Clean if requested
@@ -242,7 +248,7 @@ def build_from_source(
     if not (source_dir / "configure").exists():
         if (source_dir / "configure.ac").exists():
             print("Running autoconf...")
-            result = run_cmd(["autoconf"], cwd=source_dir)
+            result = run_cmd(["autoconf"], cwd=source_dir, env=env)
             if result.returncode != 0:
                 raise RuntimeError(f"autoconf failed: {result.stderr}")
         else:
@@ -254,13 +260,13 @@ def build_from_source(
         configure_cmd = ["./configure"]
         if configure_flags:
             configure_cmd.extend(configure_flags.split())
-        result = run_cmd(configure_cmd, cwd=source_dir)
+        result = run_cmd(configure_cmd, cwd=source_dir, env=env)
         if result.returncode != 0:
             raise RuntimeError(f"Configure failed: {result.stderr}")
 
     # Build
     print("Running make...")
-    result = run_cmd(["make", f"-j{make_jobs}"], cwd=source_dir)
+    result = run_cmd(["make", f"-j{make_jobs}"], cwd=source_dir, env=env)
     if result.returncode != 0:
         raise RuntimeError(f"Make failed: {result.stderr}")
 
@@ -311,6 +317,12 @@ def build_server(
     if not source_dir and not repo:
         raise ValueError("Must specify either source_dir or repo")
 
+    repo_config = config.repos.get(repo) if repo else None
+    if repo_config:
+        ref = ref or repo_config.default_branch or None
+        if not build_config and not configure_flags:
+            build_config = repo_config.default_build_config or None
+
     # Resolve configure flags from build_config if specified
     if build_config and not configure_flags:
         bc = get_build_config(build_config, config)
@@ -324,11 +336,8 @@ def build_server(
     if repo:
         repo_url = resolve_repo_url(repo)
 
-        # Get build script from repo config if this is a known repo
-        build_script = ""
-        if repo in config.repos:
-            repo_config = config.repos[repo]
-            build_script = repo_config.build_script
+        build_script = repo_config.build_script if repo_config else ""
+        build_env = repo_config.build_env if repo_config else {}
 
         # Get the repository
         repo_path = get_or_clone_repo(
@@ -372,6 +381,7 @@ def build_server(
                 configure_flags=configure_flags,
                 make_jobs=config.make_jobs,
                 build_script=build_script,
+                build_env=build_env,
             )
 
             # Cache the build
@@ -429,7 +439,8 @@ Examples:
 
 Known repositories:
   lambdamoo     - https://github.com/wrog/lambdamoo (multiple configs)
-  wp-lambdamoo  - https://github.com/xythian/wp-lambdamoo (waterpoint config)
+  wp-lambdamoo  - https://github.com/xythian/wp-lambdamoo (waterpoint-190, waterpoint config)
+  wp-lambdamoo-unicode - wp-lambdamoo's older waterpoint-unicode branch (build.sh)
 
 Build configurations (for --config):
   default, i64, i64_unicode, i64_xml, i64_waifs, i64_unicode_waifs, waterpoint, full
