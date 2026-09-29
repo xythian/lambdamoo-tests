@@ -110,8 +110,11 @@ lmt build --repo lambdamoo --config full --output ./builds/
 # Build specific version/branch with specific config
 lmt build --repo lambdamoo --ref v1.8.1 --config i64_unicode
 
-# Build from wp-lambdamoo (uses custom build script)
+# Build wp-lambdamoo (waterpoint-190 branch, waterpoint config by default)
 lmt build --repo wp-lambdamoo --output ./builds/wp/
+
+# Build the older waterpoint-unicode branch (uses its build.sh)
+lmt build --repo wp-lambdamoo-unicode --output ./builds/wp-unicode/
 
 # Build from any git URL
 lmt build --repo https://github.com/user/fork --ref feature-branch
@@ -131,7 +134,8 @@ lmt build --list-configs
 
 **Known Repositories:**
 - `lambdamoo` - https://github.com/wrog/lambdamoo (multiple build configs available)
-- `wp-lambdamoo` - https://github.com/xythian/wp-lambdamoo (uses custom build script)
+- `wp-lambdamoo` - https://github.com/xythian/wp-lambdamoo (`waterpoint-190` branch, `waterpoint` config)
+- `wp-lambdamoo-unicode` - same repository, older `waterpoint-unicode` branch (uses its `build.sh`)
 
 **Build Configurations:**
 
@@ -150,8 +154,10 @@ Use `--config <name>` to select a predefined configuration:
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
-The `wp-lambdamoo` repository uses a custom `build.sh` script and has a single integrated
-configuration equivalent to `full`. The `--config` flag is not needed for wp-lambdamoo.
+`wp-lambdamoo` builds its `waterpoint-190` branch with the `waterpoint` config unless
+`--ref`/`--config` say otherwise. `wp-lambdamoo-unicode` builds the older
+`waterpoint-unicode` branch with its own `build.sh` (single integrated configuration
+equivalent to `full`), so `--config` has no effect for it.
 
 ### lmt setup
 
@@ -313,8 +319,15 @@ default_branch = "main"
 
 [repos.wp-lambdamoo]
 url = "https://github.com/xythian/wp-lambdamoo"
-default_branch = "main"
+default_branch = "waterpoint-190"
+default_build_config = "waterpoint"
+
+[repos.wp-lambdamoo-unicode]
+url = "https://github.com/xythian/wp-lambdamoo"
+default_branch = "waterpoint-unicode"
 build_script = "build.sh"  # Use custom build script instead of configure/make
+build_env = { MAKEFLAGS = 'CC=gcc\ -std=gnu89' }  # Extra build environment
+known_features = ["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"]
 
 # Add custom repos
 [repos.my-fork]
