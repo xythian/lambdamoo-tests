@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Build and Test (Full Config)
+    name: Build and Test (wp-lambdamoo waterpoint-190, waterpoint config)
     runs-on: ubuntu-latest
 
     steps:
@@ -18,7 +18,8 @@ jobs:
     - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gperf bison byacc autoconf make gcc libpcre3-dev
+        sudo apt-get install -y autoconf make gcc gperf bison \
+          libpcre2-dev libexpat1-dev libunistring-dev libcrypt-dev
 
     - name: Install uv
       uses: astral-sh/setup-uv@v5
@@ -28,12 +29,11 @@ jobs:
     - name: Install dependencies
       run: uv sync
 
-    - name: Build LambdaMOO (Full)
+    - name: Build wp-lambdamoo (waterpoint-190, waterpoint config)
       run: |
-        uv run python -m lambdamoo_tests.cli build --repo lambdamoo --config full --output ./builds/
+        uv run lmt build --repo wp-lambdamoo --ref waterpoint-190 --config waterpoint --output ./builds/
 
     - name: Run Tests
       run: |
-        # Run tests against the built binary
-        # We skip upgrade tests for now as requested
-        uv run python -m lambdamoo_tests.cli test --candidate ./builds/moo -m "not upgrade"
+        # Upgrade tests need prior server builds, which CI doesn't set up
+        uv run lmt test --candidate ./builds/moo -m "not upgrade"
