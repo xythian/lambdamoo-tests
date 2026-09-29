@@ -439,7 +439,7 @@ Examples:
 
 Known repositories:
   lambdamoo     - https://github.com/wrog/lambdamoo (multiple configs)
-  wp-lambdamoo  - https://github.com/xythian/wp-lambdamoo (waterpoint-190, waterpoint config)
+  wp-lambdamoo  - https://github.com/xythian/wp-lambdamoo (waterpoint, waterpoint config)
   wp-lambdamoo-unicode - wp-lambdamoo's older waterpoint-unicode branch (build.sh)
 
 Build configurations (for --config):

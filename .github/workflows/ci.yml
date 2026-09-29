@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Build and Test (wp-lambdamoo waterpoint-190, waterpoint config)
+    name: Build and Test (wp-lambdamoo waterpoint, waterpoint config)
     runs-on: ubuntu-latest
 
     steps:
@@ -29,9 +29,9 @@ jobs:
     - name: Install dependencies
       run: uv sync
 
-    - name: Build wp-lambdamoo (waterpoint-190, waterpoint config)
+    - name: Build wp-lambdamoo (waterpoint, waterpoint config)
       run: |
-        uv run lmt build --repo wp-lambdamoo --ref waterpoint-190 --config waterpoint --output ./builds/
+        uv run lmt build --repo wp-lambdamoo --ref waterpoint --config waterpoint --output ./builds/
 
     - name: Run Tests
       run: |
