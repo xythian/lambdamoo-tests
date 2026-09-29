@@ -554,7 +554,7 @@ def platform_config() -> dict:
 # Feature Detection
 # ============================================================================
 
-from lib.features import ServerFeatures, detect_features
+from lib.features import ServerFeatures, detect_features, supports_switch
 
 
 @pytest.fixture
@@ -662,6 +662,20 @@ def requires_regexp(detected_features):
     """Skip if the regular-expression extension is not enabled."""
     if not detected_features.has_regexp:
         pytest.skip("Test requires regexp support")
+
+
+@pytest.fixture
+def requires_dns_switch(candidate_config):
+    """Skip if the server has no +N/-N switch for enabling/disabling DNS lookups."""
+    if not supports_switch(candidate_config.binary, 'N'):
+        pytest.skip("Test requires the +N/-N (DNS lookups) command-line switch")
+
+
+@pytest.fixture
+def requires_outbound_switch(candidate_config):
+    """Skip if the server has no +O/-O switch for outbound network connections."""
+    if not supports_switch(candidate_config.binary, 'O'):
+        pytest.skip("Test requires the +O/-O (outbound network) command-line switch")
 
 
 # ============================================================================

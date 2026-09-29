@@ -11,7 +11,10 @@ Server Configuration Options (from ./configure):
 - waif_dict: Waif dictionary syntax (--enable-waifs=dict or --enable-def-WAIF_DICT)
 """
 
+import subprocess
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 
 
@@ -185,6 +188,23 @@ def _parse_options_list(moo_list: str) -> Dict[str, Any]:
                 break
 
     return options
+
+
+@lru_cache(maxsize=None)
+def server_usage(binary: Path) -> str:
+    """Return the usage message a server binary prints when run without arguments."""
+    result = subprocess.run([str(binary)], capture_output=True, text=True,
+                            timeout=10, stdin=subprocess.DEVNULL)
+    return result.stdout + result.stderr
+
+
+def supports_switch(binary: Path, letter: str) -> bool:
+    """Check whether the server's usage message advertises a +X/-X switch.
+
+    Command-line switches aren't visible through server_version(), so this is
+    how tests detect options such as +O/-O (outbound network) or +N/-N (DNS).
+    """
+    return f"+{letter}|-{letter}" in server_usage(Path(binary))
 
 
 # Feature requirement constants for test marking

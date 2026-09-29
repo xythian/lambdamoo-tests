@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List
 
 from .protocol import (
     ServerProtocol,
@@ -337,7 +337,9 @@ class MooServer(ServerProtocol):
 
     def start(self, database: Path, port: Optional[int] = None,
               work_dir: Optional[Path] = None,
-              emergency_mode: bool = False) -> MooServerInstance:
+              emergency_mode: bool = False,
+              extra_args: Optional[List[str]] = None,
+              env: Optional[Dict[str, str]] = None) -> MooServerInstance:
         """Start a LambdaMOO server instance.
 
         If port is not specified, uses ephemeral port assignment (port 0)
@@ -346,6 +348,9 @@ class MooServer(ServerProtocol):
 
         If emergency_mode is True, starts with -e flag for emergency wizard mode.
         In this mode, there is no network listener and commands are read from stdin.
+
+        extra_args are inserted after the database files and before the port
+        (e.g. ['-N', '+O']); env entries are added to the server's environment.
         """
         database = Path(database).resolve()
         if not database.exists():
@@ -370,11 +375,14 @@ class MooServer(ServerProtocol):
             cmd.append('-e')
 
         cmd.extend(['-l', str(log_file), str(input_db), str(output_db)])
+        cmd.extend(extra_args or [])
 
         if not emergency_mode:
             # Use ephemeral port (0) by default - OS assigns atomically
             requested_port = port if port is not None else 0
             cmd.extend(['-p', str(requested_port)])
+
+        process_env = {**os.environ, **env} if env else None
 
         # Start the server
         if emergency_mode:
@@ -384,6 +392,7 @@ class MooServer(ServerProtocol):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=str(instance_dir),
+                env=process_env,
             )
             actual_port = 0  # No network listener in emergency mode
         else:
@@ -392,6 +401,7 @@ class MooServer(ServerProtocol):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=str(instance_dir),
+                env=process_env,
             )
             # Wait for server to log its actual listening port
             actual_port = self._wait_for_listen_port(log_file)
