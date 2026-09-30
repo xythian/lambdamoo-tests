@@ -26,6 +26,9 @@ i = i + 1  # skip header row
 ### Docstrings
 Use docstrings for modules, classes, and public functions. Include Args/Returns/Raises where helpful.
 
+### Commit Messages
+Do not add Co-Authored-By or Claude-Session trailers to commit messages.
+
 ## Testing Workflow
 
 ### Running Commands
