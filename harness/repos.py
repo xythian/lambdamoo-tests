@@ -4,6 +4,7 @@ This module handles cloning, updating, and managing git repositories
 for different LambdaMOO server variants.
 """
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -15,6 +16,8 @@ KNOWN_REPOS: Dict[str, str] = {
     "lambdamoo": "https://github.com/wrog/lambdamoo",
     "wp-lambdamoo": "https://github.com/xythian/wp-lambdamoo",
     "wp-lambdamoo-unicode": "https://github.com/xythian/wp-lambdamoo",
+    "kruton-lambdamoo": "https://github.com/kruton/lambdamoo",
+    "kruton-jit": "https://github.com/kruton/lambdamoo",
 }
 
 # Default branches for known repos (used as fallback, actual default detected from remote)
@@ -22,6 +25,8 @@ DEFAULT_BRANCHES: Dict[str, str] = {
     "lambdamoo": "main",  # wrog/lambdamoo uses main
     "wp-lambdamoo": "waterpoint",
     "wp-lambdamoo-unicode": "waterpoint-unicode",
+    "kruton-lambdamoo": "main",
+    "kruton-jit": "wip-jit-work",
 }
 
 
@@ -273,11 +278,31 @@ def get_repo_info(repo_path: Path) -> RepoInfo:
     )
 
 
+def repo_cache_name(url: str) -> str:
+    """Derive the repo cache directory name for a repository URL.
+
+    The owner is included so forks sharing a repository name (e.g.
+    wrog/lambdamoo and kruton/lambdamoo) get separate clones.
+
+    Args:
+        url: Git repository URL or local path.
+
+    Returns:
+        Directory name such as "wrog-lambdamoo".
+    """
+    path = url.rstrip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    parts = [p for p in re.split(r"[/:]", path) if p]
+    return "-".join(parts[-2:])
+
+
 def get_or_clone_repo(
     name_or_url: str,
     cache_dir: Path,
     ref: Optional[str] = None,
     update: bool = True,
+    tags_from: str = "",
 ) -> Path:
     """Get a repository, cloning if necessary.
 
@@ -291,18 +316,15 @@ def get_or_clone_repo(
         cache_dir: Directory to cache cloned repositories.
         ref: Git ref to checkout. If None, stays on current/default branch.
         update: If True, fetch updates before checkout.
+        tags_from: URL of a repository whose tags are fetched into this one,
+            for forks that don't carry the upstream version tags.
 
     Returns:
         Path to the repository.
     """
     url = resolve_repo_url(name_or_url)
 
-    # Determine repo directory name
-    repo_name = url.rstrip("/").split("/")[-1]
-    if repo_name.endswith(".git"):
-        repo_name = repo_name[:-4]
-
-    repo_path = Path(cache_dir) / repo_name
+    repo_path = Path(cache_dir) / repo_cache_name(url)
 
     # Clone if needed (git clone automatically checks out the default branch)
     freshly_cloned = False
@@ -311,6 +333,10 @@ def get_or_clone_repo(
         freshly_cloned = True
     elif update:
         update_repo(repo_path)
+
+    if tags_from and (freshly_cloned or update):
+        print(f"Fetching tags from {tags_from}...")
+        run_git(["fetch", "--tags", tags_from], cwd=repo_path)
 
     # Checkout ref if explicitly specified
     if ref:

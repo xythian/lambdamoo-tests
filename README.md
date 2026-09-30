@@ -116,6 +116,12 @@ lmt build --repo wp-lambdamoo --output ./builds/wp/
 # Build the older waterpoint-unicode branch (uses its build.sh)
 lmt build --repo wp-lambdamoo-unicode --output ./builds/wp-unicode/
 
+# Build kruton's wip-jit-work branch (waterpoint config + --enable-jit by default)
+lmt build --repo kruton-jit --output ./builds/jit/
+
+# Same branch without the JIT, for comparison
+lmt build --repo kruton-jit --config waterpoint --output ./builds/jit-nojit/
+
 # Build from any git URL
 lmt build --repo https://github.com/user/fork --ref feature-branch
 
@@ -136,6 +142,8 @@ lmt build --list-configs
 - `lambdamoo` - https://github.com/wrog/lambdamoo (multiple build configs available)
 - `wp-lambdamoo` - https://github.com/xythian/wp-lambdamoo (`waterpoint` branch, `waterpoint` config)
 - `wp-lambdamoo-unicode` - same repository, older `waterpoint-unicode` branch (uses its `build.sh`)
+- `kruton-lambdamoo` - https://github.com/kruton/lambdamoo (`main` branch, `waterpoint` config)
+- `kruton-jit` - same repository, `wip-jit-work` branch, `waterpoint_jit` config
 
 **Build Configurations:**
 
@@ -152,12 +160,23 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_waifs` | 64-bit + Waifs | `--enable-sz=i64 --enable-waifs=dict` |
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
+| `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 `wp-lambdamoo` builds its `waterpoint` branch with the `waterpoint` config unless
 `--ref`/`--config` say otherwise. `wp-lambdamoo-unicode` builds the older
 `waterpoint-unicode` branch with its own `build.sh` (single integrated configuration
 equivalent to `full`), so `--config` has no effect for it.
+
+kruton/lambdamoo carries no version tags of its own, and its `configure` derives
+the server version from `git describe`, so the `kruton-*` entries set
+`tags_from` to fetch the version tags from wrog/lambdamoo. Any branch of the fork
+can be tested with `--ref` or a build spec, e.g.
+`lmt test --build kruton-lambdamoo:some-branch:waterpoint_jit`.
+
+Cloned repositories are cached under `repos/<owner>-<name>` (e.g.
+`repos/wrog-lambdamoo`, `repos/kruton-lambdamoo`), so forks that share a
+repository name don't collide.
 
 ### lmt setup
 
@@ -217,6 +236,7 @@ lmt test --candidate ./builds/moo
 lmt test --build lambdamoo
 lmt test --build lambdamoo:full
 lmt test --build lambdamoo:v1.8.1:i64_unicode
+lmt test --build kruton-jit  # kruton's wip-jit-work branch, waterpoint + JIT
 
 # Upgrade testing with explicit binaries
 lmt test --candidate ./new-moo --prior old:./old-moo
@@ -328,6 +348,12 @@ default_branch = "waterpoint-unicode"
 build_script = "build.sh"  # Use custom build script instead of configure/make
 build_env = { MAKEFLAGS = 'CC=gcc\ -std=gnu89' }  # Extra build environment
 known_features = ["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"]
+
+[repos.kruton-jit]
+url = "https://github.com/kruton/lambdamoo"
+default_branch = "wip-jit-work"
+default_build_config = "waterpoint_jit"
+tags_from = "https://github.com/wrog/lambdamoo"  # Fetch version tags from upstream
 
 # Add custom repos
 [repos.my-fork]
