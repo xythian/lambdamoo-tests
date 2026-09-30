@@ -9,6 +9,7 @@ Server Configuration Options (from ./configure):
 - xml: XML parsing (--enable-xml)
 - waifs: Waif objects (--enable-waifs)
 - waif_dict: Waif dictionary syntax (--enable-waifs=dict or --enable-def-WAIF_DICT)
+- jit: Native code generation (--enable-jit, kruton/lambdamoo JIT branches)
 """
 
 import subprocess
@@ -34,6 +35,7 @@ class ServerFeatures:
     has_waif_dict: bool = False
     has_regexp: bool = False
     has_bitwise: bool = False
+    has_jit: bool = False
 
     def __post_init__(self):
         """Derive feature flags from raw options."""
@@ -46,6 +48,7 @@ class ServerFeatures:
         self.has_xml = 'xml' in self.features
         self.has_waifs = 'waif' in self.features or 'waifs' in self.features
         self.has_regexp = 'regexp' in self.features
+        self.has_jit = 'jit' in self.features
 
         # WAIF_DICT can be in options (True means enabled when waifs active)
         waif_dict_opt = self.options.get('WAIF_DICT')
@@ -86,6 +89,7 @@ class ServerFeatures:
             'waif_dict': self.has_waif_dict,
             'regexp': self.has_regexp,
             'bitwise': self.has_bitwise,
+            'jit': self.has_jit,
         }
         return all(feature_map.get(f, False) for f in required_features)
 
@@ -215,3 +219,4 @@ REQUIRES_WAIFS = 'waifs'
 REQUIRES_WAIF_DICT = 'waif_dict'
 REQUIRES_REGEXP = 'regexp'
 REQUIRES_BITWISE = 'bitwise'
+REQUIRES_JIT = 'jit'
