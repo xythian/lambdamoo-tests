@@ -388,12 +388,14 @@ lambdamoo-tests/
 │   ├── client.py           # MOO network client
 │   ├── assertions.py       # Custom assertions
 │   ├── features.py         # Feature detection
+│   ├── jit.py              # JIT test harness (kruton-jit)
 │   └── fault_shim.{c,py}   # LD_PRELOAD fault injection (network robustness tests)
 └── test_suites/
     ├── network/            # Network layer tests
     ├── database/           # Database persistence tests
     ├── builtins/           # Builtin function tests
     ├── persistence/        # Data persistence tests
+    ├── jit/                # JIT correctness tests (JIT servers only)
     └── upgrade/            # Upgrade compatibility tests
 ```
 
@@ -419,6 +421,26 @@ capability-dependent behavior.
 
 ### Upgrade Tests (`test_suites/upgrade/`)
 Validate database compatibility when upgrading from older versions.
+
+### JIT Tests (`test_suites/jit/`)
+Run only on servers that list `"jit"` in `server_version("features")` (the
+`kruton-jit` build); a non-JIT server runs just the negative test that the
+`jit_*` builtins are absent. Each test calls verbs past the JIT's hot
+threshold, rotates the pool with `jit_pool_rotate()` so monomorphic verb
+calls get stitched, re-warms, and checks that `verb_info(obj, verb, 1)`
+reports the verbs compiled and entered natively (`jit_profile_detail(1)` is
+turned on so entry counts are kept). Results must match the interpreter:
+
+- `test_jit.py` - arithmetic, shift, comparison, indexing and loop edge
+  cases compared cold vs. hot (directly and through a stitched caller),
+  plus tracebacks, caught errors, tick limits, `suspend()`, reprogrammed
+  verbs, property reads/writes, recursion.
+- `test_jit_workloads.py` - realistic MOO code over byte lists checked
+  against Python: an HTTP/1.1 request parser (headers, Content-Length,
+  chunked bodies, %-decoding), a UTF-8 decoder/validator, Base64,
+  CRC-32 (bitwise and table-driven), and merge/insertion sorts.
+
+`lib/jit.py` has the harness (`JitHarness`) and MOO literal helpers.
 
 ## Writing Tests
 

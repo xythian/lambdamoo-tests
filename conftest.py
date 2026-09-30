@@ -597,6 +597,8 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_waif_dict = True
     if 'bitwise' in known:
         features.has_bitwise = True
+    if 'jit' in known:
+        features.has_jit = True
 
     return features
 
@@ -662,6 +664,20 @@ def requires_regexp(detected_features):
     """Skip if the regular-expression extension is not enabled."""
     if not detected_features.has_regexp:
         pytest.skip("Test requires regexp support")
+
+
+@pytest.fixture
+def requires_jit(detected_features):
+    """Skip if the server was not built with the JIT (--enable-jit)."""
+    if not detected_features.has_jit:
+        pytest.skip("Test requires a JIT-enabled server")
+
+
+@pytest.fixture
+def requires_no_jit(detected_features):
+    """Skip if the server WAS built with the JIT (for testing non-JIT behavior)."""
+    if detected_features.has_jit:
+        pytest.skip("Test requires a server built without the JIT")
 
 
 @pytest.fixture

@@ -72,6 +72,7 @@ markers = [
     "regexp: marks tests that require regular-expression support",
     "waifs: marks tests that require WAIF support",
     "xml: marks tests that require XML support",
+    "jit: marks tests that require a JIT-enabled server",
     "upgrade: marks database upgrade tests",
     "task_persistence: marks task persistence tests",
     "persistence: marks data persistence tests",
