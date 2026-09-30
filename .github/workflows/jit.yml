@@ -1,0 +1,45 @@
+name: kruton JIT branch
+
+# Runs the suite against kruton/lambdamoo's wip-jit-work branch built with the
+# waterpoint config plus --enable-jit.  Kept out of the main CI workflow so
+# failures in the work-in-progress JIT don't block changes to the suite.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build and Test (kruton-jit, waterpoint_jit config)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf make gcc gperf bison \
+          libpcre2-dev libexpat1-dev libunistring-dev libcrypt-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Build kruton-jit (wip-jit-work, waterpoint_jit config)
+      run: |
+        uv run lmt build --repo kruton-jit --output ./builds/
+
+    - name: Run Tests
+      run: |
+        # Upgrade tests need prior server builds, which CI doesn't set up
+        uv run lmt test --candidate ./builds/moo -m "not upgrade"

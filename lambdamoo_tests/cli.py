@@ -682,6 +682,8 @@ def features_from_configure_flags(flags: list) -> list:
             features.append("waif_dict")
         elif flag == "--enable-def-BITWISE_OPERATORS":
             features.append("bitwise")
+        elif flag == "--enable-jit":
+            features.append("jit")
     return features
 
 

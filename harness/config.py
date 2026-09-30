@@ -85,6 +85,18 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
         ],
         description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise)",
     ),
+    "waterpoint_jit": BuildConfig(
+        name="waterpoint_jit",
+        configure_flags=[
+            "--enable-sz=i64",
+            "--enable-unicode",
+            "--enable-xml",
+            "--enable-waifs=dict",
+            "--enable-def-BITWISE_OPERATORS",
+            "--enable-jit",
+        ],
+        description="Waterpoint config plus the MIR-based JIT (kruton/lambdamoo JIT branches)",
+    ),
     "full": BuildConfig(
         name="full",
         configure_flags=[
@@ -122,6 +134,9 @@ class RepoConfig:
     build_script: str = ""
     # Extra environment variables for the build (configure/make or build_script)
     build_env: Dict[str, str] = field(default_factory=dict)
+    # Repository to fetch version tags from, for forks without their own
+    # (configure derives the server version from `git describe --tags`)
+    tags_from: str = ""
     # Known features for repos that don't report them via server_version
     # List of: i64, unicode, xml, waifs, waif_dict
     known_features: List[str] = field(default_factory=list)
@@ -185,6 +200,7 @@ class Config:
             self.repos["lambdamoo"] = RepoConfig(
                 url="https://github.com/wrog/lambdamoo",
                 default_branch="main",
+                tags_from="https://github.com/wrog/lambdamoo",
                 default_build_config="",  # Multiple configs available
             )
         if "wp-lambdamoo" not in self.repos:
@@ -204,6 +220,22 @@ class Config:
                 build_env={"MAKEFLAGS": "CC=gcc\\ -std=gnu89"},
                 # This branch doesn't report features via server_version
                 known_features=["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"],
+            )
+
+        if "kruton-lambdamoo" not in self.repos:
+            self.repos["kruton-lambdamoo"] = RepoConfig(
+                url="https://github.com/kruton/lambdamoo",
+                default_branch="main",
+                tags_from="https://github.com/wrog/lambdamoo",
+                default_build_config="waterpoint",
+            )
+        if "kruton-jit" not in self.repos:
+            # kruton's work-in-progress JIT branch, built with the JIT enabled
+            self.repos["kruton-jit"] = RepoConfig(
+                url="https://github.com/kruton/lambdamoo",
+                default_branch="wip-jit-work",
+                tags_from="https://github.com/wrog/lambdamoo",
+                default_build_config="waterpoint_jit",
             )
 
         # Add predefined build configs if not overridden
@@ -254,6 +286,7 @@ def _parse_repos(repos_dict: Dict[str, Any]) -> Dict[str, RepoConfig]:
                 default_build_config=info.get("default_build_config", ""),
                 build_script=info.get("build_script", ""),
                 build_env=dict(info.get("build_env", {})),
+                tags_from=info.get("tags_from", ""),
                 known_features=list(info.get("known_features", [])),
             )
     return result
@@ -425,6 +458,18 @@ build_script = "build.sh"
 build_env = { MAKEFLAGS = 'CC=gcc\ -std=gnu89' }
 known_features = ["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"]
 
+[repos.kruton-lambdamoo]
+url = "https://github.com/kruton/lambdamoo"
+default_branch = "main"
+default_build_config = "waterpoint"
+tags_from = "https://github.com/wrog/lambdamoo"
+
+[repos.kruton-jit]
+url = "https://github.com/kruton/lambdamoo"
+default_branch = "wip-jit-work"
+default_build_config = "waterpoint_jit"
+tags_from = "https://github.com/wrog/lambdamoo"
+
 # Add custom repos like this:
 # [repos.my-fork]
 # url = "https://github.com/myuser/lambdamoo"
@@ -439,6 +484,7 @@ known_features = ["i64", "unicode", "xml", "waifs", "waif_dict", "bitwise"]
 #   i64_waifs       - 64-bit integers + Waifs with dict syntax
 #   i64_unicode_waifs - 64-bit integers + Unicode + Waifs
 #   waterpoint      - Full Waterpoint config (i64 + unicode + xml + waifs)
+#   waterpoint_jit  - Waterpoint config + --enable-jit (kruton-jit)
 #   full            - Full feature set (alias for waterpoint)
 
 # Add custom build configurations like this:

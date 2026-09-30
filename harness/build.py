@@ -345,6 +345,7 @@ def build_server(
             config.repo_cache_dir,
             ref=ref,
             update=True,
+            tags_from=repo_config.tags_from if repo_config else "",
         )
 
         # Get commit hash for caching
@@ -441,9 +442,11 @@ Known repositories:
   lambdamoo     - https://github.com/wrog/lambdamoo (multiple configs)
   wp-lambdamoo  - https://github.com/xythian/wp-lambdamoo (waterpoint, waterpoint config)
   wp-lambdamoo-unicode - wp-lambdamoo's older waterpoint-unicode branch (build.sh)
+  kruton-lambdamoo - https://github.com/kruton/lambdamoo (main, waterpoint config)
+  kruton-jit    - kruton/lambdamoo's wip-jit-work branch (waterpoint_jit config)
 
 Build configurations (for --config):
-  default, i64, i64_unicode, i64_xml, i64_waifs, i64_unicode_waifs, waterpoint, full
+  default, i64, i64_unicode, i64_xml, i64_waifs, i64_unicode_waifs, waterpoint, waterpoint_jit, full
 """
     )
 
