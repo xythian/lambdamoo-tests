@@ -1,15 +1,9 @@
 name: kruton JIT branch
 
 # Runs the suite against kruton/lambdamoo's wip-jit-work branch built with the
-# waterpoint config plus --enable-jit.  Kept out of the main CI workflow so
-# failures in the work-in-progress JIT don't block changes to the suite.
+# waterpoint config plus --enable-jit.  That branch is work in progress, so
+# this only runs when triggered by hand (Actions -> Run workflow).
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-  schedule:
-    - cron: '17 6 * * *'
   workflow_dispatch:
 
 jobs:
