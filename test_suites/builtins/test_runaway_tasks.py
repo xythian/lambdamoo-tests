@@ -158,3 +158,40 @@ class TestWaifSharedStructure:
             'return "stored";',
         ])
         assert assert_moo_success(result) == '"E_RECMOVE"'
+
+
+@pytest.mark.unicode
+class TestRecodeChars:
+    """decode_chars()/encode_chars() must not spin when a character outgrows the buffer.
+
+    The conversion loop grew its output buffer by a fixed estimate; when one
+    input byte needed more output than was left (an ASCII byte becomes four
+    bytes of UTF-32) and the estimate was already met, it retried forever.
+    A 32-byte ASCII string was enough.
+    """
+
+    def test_decode_and_encode_many_lengths(self, client, program, requires_unicode):
+        """Every length up to 300 converts, in both directions and several encodings."""
+        result, elapsed = program([
+            'bad = {};',
+            's = "";',
+            'for n in [1..300]',
+            '  s = s + "a";',
+            '  if (decode_chars(s, "ASCII") != {s} || decode_chars(s, "ISO-8859-1") != {s})',
+            '    bad = {@bad, n};',
+            '  endif',
+            '  if (decode_chars(encode_chars({s}, "UTF-32LE"), "UTF-32LE") != {s})',
+            '    bad = {@bad, -n};',
+            '  endif',
+            'endfor',
+            'return bad;',
+        ])
+        assert assert_moo_success(result) == '{}'
+        assert elapsed < 10
+        assert_server_responsive(client)
+
+    def test_decode_32_ascii_bytes(self, client):
+        """The smallest input that used to hang."""
+        value = assert_moo_success(client.eval('length(decode_chars("' + "a" * 32 + '", "ASCII")[1])',
+                                               timeout=HANG_TIMEOUT))
+        assert value == '32'
