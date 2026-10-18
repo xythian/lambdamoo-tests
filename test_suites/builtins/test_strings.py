@@ -185,3 +185,15 @@ class TestUnicodeStrings:
         # "日本語" = 3 CJK characters, each is 3 bytes in UTF-8 but 1 codepoint
         result = client.eval('length("日本語")')
         assert_moo_int(result, 3)
+
+    def test_str_042_single_char_builtins_reject_empty_string(self, client, requires_unicode):
+        """STR-042: ord() and charname() raise E_INVARG for "" without reading past it.
+
+        The server decoded one character from the argument before checking for
+        an empty string, which stepped past the terminating NUL and read the
+        byte after the allocation.  A sanitizer build aborted the server.
+        """
+        for call in ['ord("")', 'charname("")']:
+            assert assert_moo_success(client.eval(f"`{call} ! ANY'")) == 'E_INVARG', call
+        assert_moo_int(client.eval('ord("a")'), 97)
+        assert_moo_int(client.eval('1 + 1'), 2)
