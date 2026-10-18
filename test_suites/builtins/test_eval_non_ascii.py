@@ -69,6 +69,22 @@ class TestNonAsciiInCode:
         assert result.startswith('{0, {"Line 1:  ')
         assert_server_alive(client)
 
+    @pytest.mark.parametrize("code", [
+        pytest.param('return \U0010FFFD;', id="last-plane-code-point"),
+        pytest.param('\uFEFF', id="bare-byte-order-mark"),
+        pytest.param('return 2.|.\U0010FFFD;', id="bitwise-dot-lookahead"),
+    ])
+    def test_eval_builtin_rejects_crash_inputs(self, client, requires_unicode, code):
+        """Inputs that segfaulted or panicked the server before the ctype fix.
+
+        ``2.|.`` sends the lexer down parse_number()'s lookahead for the
+        bitwise ``.|.`` operator, which classified the next code point with
+        isdigit() separately from yylex().
+        """
+        result = assert_moo_success(client.eval(f'eval("{code}")'))
+        assert result.startswith('{0, {"Line 1:  ')
+        assert_server_alive(client)
+
     def test_every_code_point_parses_without_crashing(self, client, program, requires_unicode):
         """Every printable non-ASCII code point, alone and after a digit or identifier, parses safely."""
         result = program([
