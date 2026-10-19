@@ -1,9 +1,14 @@
-"""Session backend: sessions surviving server replacement (SES-001 through SES-010).
+"""Session backend: sessions surviving server replacement (SES-001 through SES-012).
 
 These run only against servers built with --enable-net=session. Clients
 connect over TCP to the reference edge in lib/session.py, which carries each
 one to the server as a session, and the tests replace the server underneath
 them: a graceful shutdown, a SIGKILL after a checkpoint, and a panic.
+
+A logged-in player resumes only when the new server loads exactly the
+database the old one wrote as it detached them: the shutdown dump or the
+PANIC dump. Any other database, a checkpoint included, may disagree with the
+sessions about who is connected, so their clients are closed instead.
 """
 
 import re
@@ -182,18 +187,17 @@ class TestServerReplacement:
         assert client.eval_expect_success('player') == player
         assert session.attachments == [MODE_INITIAL, MODE_GRACEFUL]
 
-    def test_ses_006_crash_resumes_from_checkpoint(self, world):
-        """SES-006: after SIGKILL, a restart from the checkpoint resumes the player."""
+    def test_ses_006_crash_does_not_resume_from_checkpoint(self, world):
+        """SES-006: after SIGKILL no dump names the sessions, so a restart from
+        the checkpoint doesn't resume the player and the edge closes the client."""
         client = world.connect()
         player = client.eval_expect_success('player')
-        session = world.session_for(client)
 
         new = world.crash_restart()
-        world.wait_for_log(f"SESSION RECOVERED: {player}", instance=new)
-        read_until(client, RECOVERED)
 
-        assert client.eval_expect_success('player') == player
-        assert session.attachments == [MODE_INITIAL, MODE_CRASH]
+        assert wait_for_eof(client, timeout=10.0)
+        assert f"SESSION RECOVERED: {player}" not in new.get_log_contents()
+        assert new.is_running()
 
     def test_ses_007_panic_resumes_with_state_up_to_panic(self, world):
         """SES-007: after a panic, a restart from the PANIC database resumes the
@@ -210,19 +214,18 @@ class TestServerReplacement:
         assert client.eval_expect_success('#0.ses_007') == '42'
         assert session.attachments == [MODE_INITIAL, MODE_CRASH]
 
-    def test_ses_008_login_after_checkpoint_is_not_resumed(self, world):
-        """SES-008: a crash rolls back to the checkpoint, so a player who logged
-        in after it cannot resume and the edge closes their client."""
-        world.checkpoint()
+    def test_ses_008_graceful_restart_from_other_database_is_refused(self, world,
+                                                                     minimal_db):
+        """SES-008: after a graceful shutdown, a restart from any database but
+        the shutdown dump doesn't resume the player."""
         client = world.connect()
         player = client.eval_expect_success('player')
 
-        world.instance.process.kill()
-        world.instance.process.wait()
-        new = world.restart_from(world.instance.output_db)
+        world.manager.stop(world.instance)
+        new = world.restart_from(minimal_db)
 
-        assert wait_for_eof(client)
-        assert f"SESSION RECOVERED: {player}" not in new.get_log_contents()
+        assert wait_for_eof(client, timeout=10.0)
+        assert f"SESSION REATTACHED: {player}" not in new.get_log_contents()
 
     def test_ses_009_unbound_session_reattaches_as_new_connection(self, world):
         """SES-009: a client that had not logged in gets a fresh login prompt."""
@@ -245,3 +248,38 @@ class TestServerReplacement:
         client = short_hold_world.connect()
         short_hold_world.manager.stop(short_hold_world.instance)
         assert wait_for_eof(client, timeout=5.0)
+
+    def test_ses_011_panic_restart_from_checkpoint_is_refused(self, world):
+        """SES-011: after a panic, a restart from the last checkpoint instead of
+        the PANIC dump doesn't resume the player."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        world.checkpoint()
+        # A checkpoint identical to the PANIC dump would be the same database.
+        client.eval_expect_success('add_property(#0, "ses_011", 1, {player, "rw"})')
+
+        world.instance.process.send_signal(signal.SIGQUIT)
+        world.instance.process.wait(timeout=10)
+        new = world.restart_from(world.instance.output_db)
+
+        assert wait_for_eof(client, timeout=10.0)
+        assert f"SESSION RECOVERED: {player}" not in new.get_log_contents()
+
+    def test_ses_012_dump_is_used_once(self, world):
+        """SES-012: once resumed, a session no longer matches the dump it
+        resumed from, so a crash and restart from that same dump closes it."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+
+        dump = world.manager.stop(world.instance)
+        second = world.restart_from(dump)
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=second)
+        assert client.eval_expect_success('player') == player
+
+        second.process.kill()
+        second.process.wait()
+        third = world.restart_from(dump)
+
+        assert wait_for_eof(client, timeout=10.0)
+        assert f"SESSION REATTACHED: {player}" not in third.get_log_contents()
+        assert f"SESSION RECOVERED: {player}" not in third.get_log_contents()

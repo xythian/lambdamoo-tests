@@ -67,16 +67,17 @@ DIR_INPUT = 1
 DIR_OUTPUT = 2
 
 NO_PLAYER = -(2 ** 63)
+NO_DATABASE = bytes(16)
 
 MAX_CONTROL = 64 * 1024
 MAX_DATA = 1024 * 1024
 MAX_LISTENERS = 1024
 
 HEADER = struct.Struct('>IBBBBHI')
-HELLO_FIXED = struct.Struct('>16s16sQBBHIQQqqH')
+HELLO_FIXED = struct.Struct('>16s16sQBBHIQQqq16sH')
 WELCOME_PAYLOAD = struct.Struct('>QB7xQQ')
 ACK_PAYLOAD = struct.Struct('>B7xQ')
-DETACH_PAYLOAD = struct.Struct('>B7xQQ')
+DETACH_PAYLOAD = struct.Struct('>B7xQQ16s')
 BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
 CONNECT_FIXED = struct.Struct('>IHHIH2x')
@@ -164,12 +165,13 @@ class Hello:
     kind: int = KIND_CLIENT
     listen_port: int = 0
     request: int = 0
+    database: bytes = NO_DATABASE
 
     def encode(self) -> bytes:
         return HELLO_FIXED.pack(self.session_id, self.edge_id, self.generation, self.mode,
                                 self.kind, self.listen_port, self.request,
                                 self.input_position, self.output_position, self.player,
-                                self.listener, len(self.origin)) + self.origin
+                                self.listener, self.database, len(self.origin)) + self.origin
 
 
 @dataclass
@@ -205,8 +207,8 @@ def decode_ack(payload: bytes) -> Tuple[int, int]:
     return ACK_PAYLOAD.unpack(payload)
 
 
-def decode_detach(payload: bytes) -> Tuple[int, int, int]:
-    """Return a DETACH's mode, input position and output position."""
+def decode_detach(payload: bytes) -> Tuple[int, int, int, bytes]:
+    """Return a DETACH's mode, positions and the digest of the dump it names."""
     return DETACH_PAYLOAD.unpack(payload)
 
 
@@ -405,11 +407,12 @@ class Session:
     kind: int = KIND_CLIENT
     listen_port: int = 0
     request: int = 0
+    database: bytes = NO_DATABASE
 
     def hello(self, edge_id: bytes) -> Hello:
         return Hello(self.session_id, edge_id, self.generation, self.mode, self.input_position,
                      self.output_position, self.player, self.listener, self.origin,
-                     self.kind, self.listen_port, self.request)
+                     self.kind, self.listen_port, self.request, self.database)
 
 
 @dataclass
@@ -730,7 +733,10 @@ class SessionEdge:
             carrier.close()
             return None
         session.attachments.append(session.mode)
+        # Until a DETACH names a dump, losing this server leaves nothing
+        # the session can be resumed from.
         session.mode = MODE_CRASH
+        session.database = NO_DATABASE
         session.request = 0
         return carrier
 
@@ -833,12 +839,14 @@ class SessionEdge:
             elif frame.type == BIND:
                 session.player, session.listener = decode_bind(frame.payload)
             elif frame.type == DETACH:
-                mode, input_position, output_position = decode_detach(frame.payload)
-                if mode == MODE_GRACEFUL and (input_position, output_position) == \
-                        (session.input_position, session.output_position):
-                    session.mode = MODE_GRACEFUL
-                else:
-                    session.mode = MODE_CRASH
+                mode, input_position, output_position, database = \
+                    decode_detach(frame.payload)
+                if output_position != session.output_position or \
+                        input_position > session.input_position or \
+                        mode == MODE_GRACEFUL and input_position != session.input_position:
+                    database = NO_DATABASE
+                session.mode = mode
+                session.database = database
                 return 'detached'
             elif frame.type == CLOSE:
                 session.closed_by_server = True
@@ -894,4 +902,5 @@ __all__ = [
     'decode_data', 'decode_ack', 'decode_detach', 'decode_bind',
     'HELLO', 'WELCOME', 'INPUT', 'OUTPUT', 'ACK', 'DETACH', 'CLOSE', 'ERROR', 'BIND',
     'MODE_INITIAL', 'MODE_GRACEFUL', 'MODE_CRASH', 'DIR_INPUT', 'DIR_OUTPUT', 'NO_PLAYER',
+    'NO_DATABASE',
 ]

@@ -1,4 +1,4 @@
-"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-011).
+"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-013).
 
 These speak protocol 1.0 to the server directly, as an edge would, to check
 the handshake, positions, acknowledgements and the server's refusal of frames
@@ -12,14 +12,15 @@ import pytest
 
 from lib.session import (
     ACK, BIND, CLOSE, DIR_INPUT, HEADER, HELLO, MAGIC, MODE_CRASH,
-    MODE_GRACEFUL, MODE_INITIAL, OUTPUT, WELCOME, Carrier, Hello, decode_ack,
+    HELLO_FIXED, MODE_GRACEFUL, MODE_INITIAL, OUTPUT, WELCOME, Carrier, Hello, decode_ack,
     decode_bind, decode_data, encode_frame, encode_input,
 )
 
 
-def new_hello(mode=MODE_INITIAL, player=-(2 ** 63), listener=-(2 ** 63), origin=b'test:origin'):
+def new_hello(mode=MODE_INITIAL, player=-(2 ** 63), listener=-(2 ** 63), origin=b'test:origin',
+              database=bytes(16)):
     return Hello(secrets.token_bytes(16), secrets.token_bytes(16), 1, mode,
-                 player=player, listener=listener, origin=origin)
+                 player=player, listener=listener, origin=origin, database=database)
 
 
 class Attached:
@@ -99,6 +100,21 @@ class TestHandshake:
         carrier.send(encode_frame(HELLO, new_hello(mode=mode, player=3, listener=0).encode()))
         assert carrier.is_closed()
 
+    def test_spr_012_initial_hello_with_database_is_refused(self, session_server):
+        """SPR-012: only a resumed session names the database it was detached with."""
+        carrier = Carrier(str(session_server.socket_path))
+        carrier.send(encode_frame(HELLO, new_hello(database=bytes(range(16))).encode()))
+        assert carrier.is_closed()
+
+    def test_spr_013_resume_naming_other_database_is_refused(self, session_server):
+        """SPR-013: a resumed session naming a database other than the one the
+        server loaded is refused before its binding is considered."""
+        carrier = Carrier(str(session_server.socket_path))
+        carrier.send(encode_frame(HELLO, new_hello(mode=MODE_GRACEFUL, player=3, listener=0,
+                                                   database=bytes(range(16))).encode()))
+        assert carrier.is_closed()
+        assert 'SESSION REATTACHED' not in session_server.get_log_contents()
+
     def test_spr_004_first_frame_must_be_hello(self, session_server):
         """SPR-004: any other first frame ends the attachment."""
         carrier = Carrier(str(session_server.socket_path))
@@ -110,18 +126,18 @@ class TestFrames:
     """Frame validation."""
 
     @pytest.mark.parametrize('header', [
-        pytest.param(HEADER.pack(MAGIC ^ 1, 1, 0, HELLO, 0, 0, 82), id='bad-magic'),
-        pytest.param(HEADER.pack(MAGIC, 2, 0, HELLO, 0, 0, 82), id='major-version'),
-        pytest.param(HEADER.pack(MAGIC, 1, 1, HELLO, 0, 0, 82), id='newer-minor-version'),
-        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 1, 0, 82), id='reserved-byte'),
-        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 0, 1, 82), id='flags'),
+        pytest.param(HEADER.pack(MAGIC ^ 1, 1, 0, HELLO, 0, 0, HELLO_FIXED.size), id='bad-magic'),
+        pytest.param(HEADER.pack(MAGIC, 2, 0, HELLO, 0, 0, HELLO_FIXED.size), id='major-version'),
+        pytest.param(HEADER.pack(MAGIC, 1, 1, HELLO, 0, 0, HELLO_FIXED.size), id='newer-minor-version'),
+        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 1, 0, HELLO_FIXED.size), id='reserved-byte'),
+        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 0, 1, HELLO_FIXED.size), id='flags'),
         pytest.param(HEADER.pack(MAGIC, 1, 0, 99, 0, 0, 0), id='unknown-type'),
-        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 0, 0, 81), id='short-hello'),
+        pytest.param(HEADER.pack(MAGIC, 1, 0, HELLO, 0, 0, HELLO_FIXED.size - 1), id='short-hello'),
     ])
     def test_spr_005_invalid_header_is_rejected(self, session_server, header):
         """SPR-005: the server ends an attachment whose frame header is invalid."""
         carrier = Carrier(str(session_server.socket_path))
-        carrier.send(header + bytes(82))
+        carrier.send(header + bytes(HELLO_FIXED.size))
         assert carrier.is_closed()
 
     def test_spr_006_frames_split_across_writes(self, session_server):
