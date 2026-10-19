@@ -244,6 +244,41 @@ class TestListPersistence:
             read_client.close()
             server_pair.read_server.stop(read_instance)
 
+    def test_deeply_nested_list(self, server_pair: ServerPair, write_server_db, tmp_path):
+        """A list nested a million deep is written and read without overflowing the C stack."""
+        depth = 1_000_000
+        db_path = tmp_path / "test.db"
+        shutil.copy(write_server_db, db_path)
+
+        write_instance = server_pair.write_server.start(database=db_path)
+        write_client = server_pair.write_server.connect(write_instance)
+        write_client.authenticate('Wizard')
+
+        try:
+            assert_moo_success(write_client.eval('add_property(#0, "server_options", create(#1), {#1, "r"})'))
+            assert_moo_success(write_client.eval('add_property(#0.server_options, "fg_ticks", 100000000, {#1, "r"})'))
+            assert_moo_success(write_client.eval('add_property(#0.server_options, "fg_seconds", 120, {#1, "r"})'))
+            assert_moo_success(write_client.eval('load_server_options()'))
+            build = f'x = {{"core"}}; for i in [1..{depth}] x = {{x}}; endfor; add_property(#0, "deep", x, {{#1, "rw"}});'
+            result = write_client.eval('eval("' + build.replace('"', '\\"') + '")', timeout=60)
+            assert assert_moo_success(result) == '{1, 0}'
+            write_client.checkpoint()
+        finally:
+            write_client.close()
+            output_db = server_pair.write_server.stop(write_instance)
+
+        read_instance = server_pair.read_server.start(database=output_db)
+        read_client = server_pair.read_server.connect(read_instance)
+        read_client.authenticate('Wizard')
+
+        try:
+            walk = 'x = #0.deep; n = 0; while (typeof(x) == LIST && length(x) == 1) x = x[1]; n = n + 1; endwhile; return {n, x};'
+            result = read_client.eval('eval("' + walk.replace('"', '\\"') + '")', timeout=60)
+            assert assert_moo_success(result) == f'{{1, {{{depth + 1}, "core"}}}}'
+        finally:
+            read_client.close()
+            server_pair.read_server.stop(read_instance)
+
 
 @pytest.mark.persistence
 class TestObjectPersistence:
