@@ -4,7 +4,7 @@ Both builtins take an optional list of {name, value} pairs, the same on every
 network backend:
 
     listen(OBJECT, POINT [, PRINT-MESSAGES] [, OPTIONS])
-        "print-messages", "tls", "certificate", "key"
+        "print-messages", "tls", "certificate", "key", "acme"
     open_network_connection(HOST, PORT [, LISTENER] [, OPTIONS])
         "listener", "tls"
 
@@ -71,9 +71,11 @@ class TestListenOptions:
         assert result_of(client, f'listen(#0, {port}, {{{{1, 1}}}})') == 'E_INVARG'
 
     def test_certificate_needs_tls(self, client, requires_options, port):
-        """"certificate" and "key" mean nothing without "tls"."""
+        """"certificate", "key" and "acme" mean nothing without "tls"."""
         assert result_of(client, f'listen(#0, {port}, {{{{"certificate", "c.pem"}}, '
                                  f'{{"key", "k.pem"}}}})') == 'E_INVARG'
+        assert result_of(client, f'listen(#0, {port}, {{{{"acme", "moo.example.org"}}}})') \
+            == 'E_INVARG'
 
 
 class TestTlsWithoutTlsSupport:

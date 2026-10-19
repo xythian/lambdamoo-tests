@@ -28,7 +28,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 MAGIC = 0x4D534553
 VERSION_MAJOR = 1
@@ -54,6 +54,7 @@ KIND_CONTROL = 2
 CONNECT_TLS = 1
 
 LISTEN_TLS = 1
+LISTEN_ACME = 2
 
 FAILED_DESTINATION = 1
 FAILED_RESOURCES = 2
@@ -80,7 +81,7 @@ BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
 CONNECT_FIXED = struct.Struct('>IHHIH2x')
 CONNECT_FAILED_FIXED = struct.Struct('>IB3x')
-LISTEN_FIXED = struct.Struct('>HHHH')
+LISTEN_FIXED = struct.Struct('>HHHHH')
 
 _LENGTHS = {
     HELLO: (HELLO_FIXED.size, MAX_CONTROL),
@@ -221,30 +222,38 @@ class Listen:
     tls: bool = False
     certificate: Optional[str] = None
     key: Optional[str] = None
+    acme: Tuple[str, ...] = ()
 
 
 def decode_listeners(payload: bytes) -> List[Listen]:
     """Return the ports a LISTENERS frame names.
 
     Raises:
-        ProtocolError: an entry is truncated, repeats a port or sets an unknown flag.
+        ProtocolError: an entry is truncated, repeats a port, sets an unknown
+            flag, or gives paths or ACME names its flags don't allow.
     """
     listens: List[Listen] = []
     offset = 0
     while offset < len(payload):
         if offset + LISTEN_FIXED.size > len(payload):
             raise ProtocolError("truncated LISTENERS entry")
-        port, flags, certificate_length, key_length = LISTEN_FIXED.unpack_from(payload, offset)
+        port, flags, certificate_length, key_length, acme_length = \
+            LISTEN_FIXED.unpack_from(payload, offset)
         offset += LISTEN_FIXED.size
-        end = offset + certificate_length + key_length
-        if (end > len(payload) or not port or flags & ~LISTEN_TLS
+        end = offset + certificate_length + key_length + acme_length
+        tls, acme = bool(flags & LISTEN_TLS), bool(flags & LISTEN_ACME)
+        if (end > len(payload) or not port or flags & ~(LISTEN_TLS | LISTEN_ACME)
                 or any(listen.port == port for listen in listens)
-                or (certificate_length or key_length) and not flags & LISTEN_TLS
-                or bool(certificate_length) != bool(key_length)):
+                or (certificate_length or key_length or acme) and not tls
+                or bool(certificate_length) != bool(key_length)
+                or acme != bool(acme_length)
+                or acme and certificate_length):
             raise ProtocolError("invalid LISTENERS entry")
-        certificate = payload[offset:offset + certificate_length].decode() or None
-        key = payload[offset + certificate_length:end].decode() or None
-        listens.append(Listen(port, bool(flags & LISTEN_TLS), certificate, key))
+        fields = payload[offset:end]
+        certificate = fields[:certificate_length].decode() or None
+        key = fields[certificate_length:certificate_length + key_length].decode() or None
+        names = fields[certificate_length + key_length:].decode()
+        listens.append(Listen(port, tls, certificate, key, tuple(names.split(',')) if names else ()))
         offset = end
     if len(listens) > MAX_LISTENERS:
         raise ProtocolError("too many LISTENERS entries")
@@ -443,7 +452,8 @@ class SessionEdge:
     def __init__(self, socket_path: str, host: str = '127.0.0.1', port: int = 0,
                  hold: float = 30.0, retry_interval: float = 0.05,
                  tls_context: Optional[ssl.SSLContext] = None,
-                 certificate: Optional[str] = None, key: Optional[str] = None):
+                 certificate: Optional[str] = None, key: Optional[str] = None,
+                 acme: Optional[Callable[[Tuple[str, ...]], Tuple[str, str]]] = None):
         """Listen for clients on host:port, the server's main listener.
 
         Args:
@@ -452,6 +462,10 @@ class SessionEdge:
             certificate: the edge's own certificate chain file, for TLS ports
                 the server asks for without naming one.
             key: the private key file for certificate.
+            acme: given the names of a port the server asks to have an ACME
+                certificate for, returns the certificate chain and key files
+                to accept TLS with. The reference edge has no ACME client of
+                its own, so without this it doesn't open such ports.
         """
         self.socket_path = str(socket_path)
         self.host = host
@@ -460,6 +474,8 @@ class SessionEdge:
         self.tls_context = tls_context or ssl.create_default_context()
         self.certificate = certificate
         self.key = key
+        self.acme = acme
+        self.requested: List[Listen] = []
         self.edge_id = secrets.token_bytes(16)
         self.sessions: Dict[bytes, Session] = {}
         self._lock = threading.Lock()
@@ -623,7 +639,12 @@ class SessionEdge:
         """
         if not listen.tls:
             return None
-        certificate, key = listen.certificate or self.certificate, listen.key or self.key
+        if listen.acme:
+            if self.acme is None:
+                raise ValueError("ACME requested, but the edge has no ACME client")
+            certificate, key = self.acme(listen.acme)
+        else:
+            certificate, key = listen.certificate or self.certificate, listen.key or self.key
         if not certificate:
             raise ValueError("TLS requested, but the edge has no certificate")
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -635,6 +656,7 @@ class SessionEdge:
 
         A port whose settings changed is opened again with the new ones.
         """
+        self.requested = listens
         wanted = {listen.port: listen for listen in listens}
         with self._lock:
             for port in [p for p, current in self._ports.items() if wanted.get(p) != current.listen]:

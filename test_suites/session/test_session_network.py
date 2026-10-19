@@ -1,10 +1,12 @@
-"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-016).
+"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-019).
 
 A session server listens only on its Unix socket. Ports opened with listen()
 and connections made with open_network_connection() are the edge's: the
 server asks for them over the edge's control attachment, so they belong to
 the edge's process and outlast the server. The edge also terminates TLS for
-ports the server asks for with the "tls" option, and for the -t port.
+ports the server asks for with the "tls" option, and for the -t port, with
+certificate files the server names, a certificate the edge gets by ACME, or
+its own.
 """
 
 import shutil
@@ -118,7 +120,7 @@ class NetWorld:
 
     def __init__(self, manager, database: Path, socket_path: Path, outbound: bool = True,
                  tls_context: ssl.SSLContext = None, extra_args=(),
-                 certificate: Certificate = None):
+                 certificate: Certificate = None, acme=None):
         self.manager = manager
         self.socket_path = socket_path
         self.args = ['+O' if outbound else '-O', *extra_args]
@@ -126,7 +128,7 @@ class NetWorld:
                                       extra_args=self.args)
         self.edge = SessionEdge(str(socket_path), hold=15.0, tls_context=tls_context,
                                 certificate=certificate and str(certificate.cert),
-                                key=certificate and str(certificate.key)).start()
+                                key=certificate and str(certificate.key), acme=acme).start()
         self.clients = []
         self.wizard = self.connect(self.edge.port, 'Wizard')
 
@@ -396,3 +398,62 @@ class TestListenTls:
             assert port in world.edge.listening_ports
         finally:
             world.close()
+
+
+class TestListenAcme:
+    """The "acme" option asks the edge to get the port's certificate by ACME."""
+
+    def test_snt_017_listen_acme(self, requires_session, candidate_server, multiplayer_db,
+                                 tmp_path, certificate):
+        """SNT-017: the edge is given the names to get a certificate for, and
+        accepts TLS on the port with the certificate it got."""
+        requests = []
+
+        def acme(names):
+            requests.append(names)
+            return str(certificate.cert), str(certificate.key)
+
+        world = NetWorld(candidate_server, multiplayer_db, tmp_path / "moo.sock", acme=acme)
+        try:
+            port = free_port()
+            world.wizard.eval_expect_success(
+                f'listen(#0, {port}, {{{{"tls", 1}}, {{"acme", "localhost"}}}})')
+            assert wait_until(lambda: port in world.edge.listening_ports)
+            assert requests == [('localhost',)]
+            player2 = world.connect(port, 'Player2', tls=certificate.client)
+            assert player2.eval_expect_success('player') == '#4'
+        finally:
+            world.close()
+
+    def test_snt_018_acme_names_reach_edge(self, net_world):
+        """SNT-018: a list of names reaches the edge in order, and an edge that
+        can't do ACME doesn't open the port."""
+        port = free_port()
+        net_world.wizard.eval_expect_success(
+            f'listen(#0, {port}, {{{{"tls", 1}}, {{"acme", {{"moo.example.org", '
+            f'"*.moo.example.org"}}}}}})')
+        assert wait_until(lambda: any(listen.port == port for listen in net_world.edge.requested))
+        listen = next(listen for listen in net_world.edge.requested if listen.port == port)
+        assert (listen.tls, listen.certificate, listen.acme) == \
+            (True, None, ('moo.example.org', '*.moo.example.org'))
+        assert port not in net_world.edge.listening_ports
+
+    def test_snt_019_acme_options(self, net_world):
+        """SNT-019: "acme" needs "tls", excludes "certificate" and "key", and
+        takes a host name or a non-empty list of them."""
+        wizard = net_world.wizard
+        port = free_port()
+
+        def listen(options: str) -> str:
+            return error_of(wizard, f'listen(#0, {port}, {{{{"tls", 1}}, {options}}})')
+
+        assert error_of(wizard, f'listen(#0, {port}, {{{{"acme", "moo.example.org"}}}})') \
+            == 'E_INVARG'
+        assert listen('{"acme", "moo.example.org"}, {"certificate", "c.pem"}, '
+                      '{"key", "k.pem"}') == 'E_INVARG'
+        assert listen('{"acme", {}}') == 'E_INVARG'
+        assert listen('{"acme", "moo.example.org,other.example.org"}') == 'E_INVARG'
+        assert listen('{"acme", ""}') == 'E_INVARG'
+        assert listen('{"acme", 1}') == 'E_TYPE'
+        assert listen('{"acme", {"moo.example.org", 1}}') == 'E_TYPE'
+        assert str(port) not in wizard.eval_expect_success('listeners()')
