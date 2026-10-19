@@ -5,9 +5,11 @@ import pytest
 from lib.assertions import assert_moo_success
 
 
-# The PCRE layer initializes absent byte offsets to (0, -1), then list.c runs
-# both through utf_char_index().  The resulting public MOO sentinel is (1, 0).
-NO_CAPTURE = (1, 0)
+# A group that took no part in the match is reported as {0, -1}, the
+# documented sentinel.  Unicode builds used to report {1, 0} instead, because
+# list.c converted the byte offsets 0 and -1 with utf_char_index(), which
+# mapped 0 to 1.
+NO_CAPTURE = (0, -1)
 
 
 def moo_string(value):
