@@ -8,6 +8,7 @@ Usage:
     lmt setup --moo-binary ./moo
     lmt clean --list
     lmt test --candidate ./moo
+    lmt edge /path/to/moo.sock
 """
 
 import argparse
@@ -274,6 +275,35 @@ Examples:
     )
 
     return parser
+
+
+def add_edge_parser(subparsers):
+    """Add the 'edge' subcommand parser."""
+    parser = subparsers.add_parser(
+        'edge',
+        help='Run the reference edge for a session server',
+        description='Accept TCP clients and carry each one to a server built with '
+                    '--enable-net=session, holding clients while the server is replaced. '
+                    'See Session_Protocol.md in wp-lambdamoo.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  ./moo input.db output.db /path/to/moo.sock &
+  lmt edge /path/to/moo.sock --port 7777
+"""
+    )
+    parser.add_argument("socket", help="The server's session socket")
+    parser.add_argument("--host", default="127.0.0.1", help="Address to accept clients on")
+    parser.add_argument("--port", type=int, default=7777, help="Port to accept clients on")
+    parser.add_argument("--hold", type=float, default=30.0,
+                        help="Seconds to hold a client while no server accepts its session")
+    return parser
+
+
+def cmd_edge(args):
+    """Run the reference edge until interrupted."""
+    from lib.session import serve
+    return serve(args.socket, args.host, args.port, args.hold)
 
 
 def add_test_parser(subparsers):
@@ -1043,6 +1073,7 @@ Environment Variables:
     add_clean_parser(subparsers)
     add_test_parser(subparsers)
     add_roundtrip_parser(subparsers)
+    add_edge_parser(subparsers)
 
     # Parse arguments
     args = parser.parse_args()
@@ -1067,6 +1098,7 @@ Environment Variables:
         'clean': cmd_clean,
         'test': cmd_test,
         'roundtrip': cmd_roundtrip,
+        'edge': cmd_edge,
     }
 
     handler = handlers.get(args.command)

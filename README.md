@@ -86,6 +86,7 @@ lmt build    # Build MOO server from source or repository
 lmt setup    # Set up test databases
 lmt clean    # Clean cached repositories and builds
 lmt test     # Run the test suite
+lmt edge     # Run the reference edge for a session-backend server
 ```
 
 **Global options:**
@@ -161,6 +162,7 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
 | `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
+| `waterpoint_session` | Waterpoint + session backend | waterpoint flags plus `--enable-net=session,poll,require` (wp-lambdamoo) |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 `wp-lambdamoo` builds its `waterpoint` branch with the `waterpoint` config unless
@@ -415,6 +417,30 @@ and output ordering. Also covers command-line network switches (e.g. `+N`/`-N`
 for DNS lookups, detected from the server's usage message) and, on Linux,
 recovery from injected descriptor and `select()`/`poll()` failures using an
 LD_PRELOAD shim compiled at test time.
+
+### Session Tests (`test_suites/session/`)
+Run only on servers built with the session network backend (wp-lambdamoo's
+`--enable-net=session`, the `waterpoint_session` config), which listen on a
+Unix socket instead of a TCP port. On such a build every test reaches the
+server through the reference edge in `lib/session.py`, which `MooServer.start`
+puts in front of it automatically, so the rest of the suite runs unchanged.
+
+- `test_session_lifecycle.py` - clients stay connected while the server is
+  replaced by a graceful restart, a SIGKILL after a checkpoint, and a panic;
+  players who logged in after the checkpoint, unbound sessions, and the
+  edge's hold expiring.
+- `test_session_protocol.py` - the wire protocol spoken directly: the
+  handshake, refused attachments, invalid frames, positions and
+  acknowledgements, BIND and CLOSE.
+
+The protocol is specified in `Session_Protocol.md` in wp-lambdamoo. To run
+the edge by hand, start the server with a socket path in place of the port
+and point `lmt edge` at it:
+
+```bash
+./moo input.db output.db /tmp/moo.sock &
+lmt edge /tmp/moo.sock --port 7777
+```
 
 ### Database Tests (`test_suites/database/`)
 Validate object creation, destruction, hierarchy, properties, and verbs.
