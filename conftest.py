@@ -766,6 +766,6 @@ def requires_session(candidate_config):
 
 @pytest.fixture
 def requires_tcp_listeners(candidate_config):
-    """Skip on session builds, which have one session socket and no listen()."""
+    """Skip on session builds, whose listen() ports are opened by the edge, not the server."""
     if is_session_build(candidate_config.binary):
-        pytest.skip("Test requires TCP listeners; session builds accept only through an edge")
+        pytest.skip("Test requires the server's own TCP listeners; a session build's are the edge's")

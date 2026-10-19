@@ -162,7 +162,7 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
 | `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
-| `waterpoint_session` | Waterpoint + session backend | waterpoint flags plus `--enable-net=session,poll,require` (wp-lambdamoo) |
+| `waterpoint_session` | Waterpoint + session backend | waterpoint flags plus `--enable-net=session,poll,outoff,require` (wp-lambdamoo) |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 `wp-lambdamoo` builds its `waterpoint` branch with the `waterpoint` config unless
@@ -432,6 +432,8 @@ puts in front of it automatically, so the rest of the suite runs unchanged.
 - `test_session_protocol.py` - the wire protocol spoken directly: the
   handshake, refused attachments, invalid frames, positions and
   acknowledgements, BIND and CLOSE.
+- `test_session_network.py` - `listen()` ports and `open_network_connection()`
+  (plain and TLS) made by the edge, and which of them survive a restart.
 
 The protocol is specified in `Session_Protocol.md` in wp-lambdamoo. To run
 the edge by hand, start the server with a socket path in place of the port

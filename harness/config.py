@@ -105,7 +105,7 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-xml",
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
-            "--enable-net=session,poll,require",
+            "--enable-net=session,poll,outoff,require",
         ],
         description="Waterpoint config with the session network backend (servers that have it)",
     ),

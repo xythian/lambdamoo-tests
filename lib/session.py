@@ -12,13 +12,18 @@ It provides:
 - frame and payload codecs, and ``Carrier``, one attachment's connection to
   the server, for tests that speak the protocol directly;
 - ``SessionEdge``, a reference edge that accepts TCP clients and bridges each
-  to a session, reattaching after the server restarts, crashes or panics.
+  to a session, reattaching after the server restarts, crashes or panics. It
+  also keeps a control attachment, through which it listens on the ports the
+  server's ``listen()`` calls ask for and makes the outbound connections,
+  optionally over TLS, that ``open_network_connection()`` asks for.
 """
 
 import errno
+import logging
 import secrets
 import select
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -38,6 +43,18 @@ DETACH = 6
 CLOSE = 7
 ERROR = 8
 BIND = 9
+LISTENERS = 10
+CONNECT = 11
+CONNECT_FAILED = 12
+
+KIND_CLIENT = 0
+KIND_OUTBOUND = 1
+KIND_CONTROL = 2
+
+CONNECT_TLS = 1
+
+FAILED_DESTINATION = 1
+FAILED_RESOURCES = 2
 
 MODE_INITIAL = 1
 MODE_GRACEFUL = 2
@@ -50,14 +67,17 @@ NO_PLAYER = -(2 ** 63)
 
 MAX_CONTROL = 64 * 1024
 MAX_DATA = 1024 * 1024
+MAX_LISTENERS = 1024
 
 HEADER = struct.Struct('>IBBBBHI')
-HELLO_FIXED = struct.Struct('>16s16sQB7xQQqqH')
+HELLO_FIXED = struct.Struct('>16s16sQBBHIQQqqH')
 WELCOME_PAYLOAD = struct.Struct('>QB7xQQ')
 ACK_PAYLOAD = struct.Struct('>B7xQ')
 DETACH_PAYLOAD = struct.Struct('>B7xQQ')
 BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
+CONNECT_FIXED = struct.Struct('>IHHIH2x')
+CONNECT_FAILED_FIXED = struct.Struct('>IB3x')
 
 _LENGTHS = {
     HELLO: (HELLO_FIXED.size, MAX_CONTROL),
@@ -69,7 +89,12 @@ _LENGTHS = {
     CLOSE: (0, MAX_CONTROL),
     ERROR: (0, MAX_CONTROL),
     BIND: (BIND_PAYLOAD.size, BIND_PAYLOAD.size),
+    LISTENERS: (0, 2 * MAX_LISTENERS),
+    CONNECT: (CONNECT_FIXED.size + 1, MAX_CONTROL),
+    CONNECT_FAILED: (CONNECT_FAILED_FIXED.size, MAX_CONTROL),
 }
+
+log = logging.getLogger(__name__)
 
 
 class ProtocolError(Exception):
@@ -132,9 +157,13 @@ class Hello:
     player: int = NO_PLAYER
     listener: int = NO_PLAYER
     origin: bytes = b''
+    kind: int = KIND_CLIENT
+    listen_port: int = 0
+    request: int = 0
 
     def encode(self) -> bytes:
         return HELLO_FIXED.pack(self.session_id, self.edge_id, self.generation, self.mode,
+                                self.kind, self.listen_port, self.request,
                                 self.input_position, self.output_position, self.player,
                                 self.listener, len(self.origin)) + self.origin
 
@@ -180,6 +209,34 @@ def decode_detach(payload: bytes) -> Tuple[int, int, int]:
 def decode_bind(payload: bytes) -> Tuple[int, int]:
     """Return a BIND's player and listener."""
     return BIND_PAYLOAD.unpack(payload)
+
+
+def decode_listeners(payload: bytes) -> List[int]:
+    """Return the ports a LISTENERS frame names."""
+    return list(struct.unpack(f'>{len(payload) // 2}H', payload))
+
+
+@dataclass
+class Connect:
+    """A server's request that the edge open an outbound connection."""
+    request: int
+    port: int
+    flags: int
+    timeout: int
+    host: str
+
+    @classmethod
+    def decode(cls, payload: bytes) -> 'Connect':
+        request, port, flags, timeout, host_length = CONNECT_FIXED.unpack_from(payload)
+        host = payload[CONNECT_FIXED.size:]
+        if len(host) != host_length or not request or flags & ~CONNECT_TLS:
+            raise ProtocolError("invalid CONNECT")
+        return cls(request, port, flags, timeout, host.decode('utf-8', 'replace'))
+
+
+def encode_connect_failed(request: int, code: int, reason: str) -> bytes:
+    """Return a CONNECT_FAILED frame."""
+    return encode_frame(CONNECT_FAILED, CONNECT_FAILED_FIXED.pack(request, code) + reason.encode()[:4096])
 
 
 def peer_pid(sock: socket.socket) -> Optional[int]:
@@ -301,10 +358,26 @@ class Session:
     listener: int = NO_PLAYER
     attachments: List[int] = field(default_factory=list)
     closed_by_server: bool = False
+    kind: int = KIND_CLIENT
+    listen_port: int = 0
+    request: int = 0
 
     def hello(self, edge_id: bytes) -> Hello:
         return Hello(self.session_id, edge_id, self.generation, self.mode, self.input_position,
-                     self.output_position, self.player, self.listener, self.origin)
+                     self.output_position, self.player, self.listener, self.origin,
+                     self.kind, self.listen_port, self.request)
+
+
+def write_all(sock: socket.socket, data: bytes) -> None:
+    """Send all of data, waiting while a non-blocking socket is full."""
+    view = memoryview(data)
+    while view:
+        try:
+            sent = sock.send(view)
+        except (ssl.SSLWantWriteError, ssl.SSLWantReadError, BlockingIOError):
+            select.select([], [sock], [], 1.0)
+            continue
+        view = view[sent:]
 
 
 class SessionEdge:
@@ -316,37 +389,78 @@ class SessionEdge:
     retries the socket until a server accepts the session, the server refuses
     it, or ``hold`` seconds pass; in the last two cases it closes the client.
     Input already sent to a server is never sent again.
+
+    A control attachment, reopened whenever it ends, carries the server's
+    LISTENERS and CONNECT requests. Ports the server listens on stay open
+    while no server is attached, so clients that arrive then are held too.
     """
 
     def __init__(self, socket_path: str, host: str = '127.0.0.1', port: int = 0,
-                 hold: float = 30.0, retry_interval: float = 0.05):
+                 hold: float = 30.0, retry_interval: float = 0.05,
+                 tls_context: Optional[ssl.SSLContext] = None):
+        """Listen for clients on host:port, the server's main listener.
+
+        Args:
+            tls_context: verifies outbound TLS connections; defaults to the
+                system's trusted certificates.
+        """
         self.socket_path = str(socket_path)
+        self.host = host
         self.hold = hold
         self.retry_interval = retry_interval
+        self.tls_context = tls_context or ssl.create_default_context()
         self.edge_id = secrets.token_bytes(16)
         self.sessions: Dict[bytes, Session] = {}
         self._lock = threading.Lock()
         self._threads: List[threading.Thread] = []
         self._closing = threading.Event()
-        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._listener.bind((host, port))
-        self._listener.listen(64)
+        self._listener = self._bind(port)
         self.port = self._listener.getsockname()[1]
+        self._ports: Dict[int, socket.socket] = {}
+        self._control: Optional[Carrier] = None
+        self._control_lock = threading.Lock()
         self._acceptor = threading.Thread(target=self._accept_loop, name='session-edge', daemon=True)
+        self._controller = threading.Thread(target=self._control_loop, name='session-edge-control',
+                                            daemon=True)
+
+    def _bind(self, port: int) -> socket.socket:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((self.host, port))
+            listener.listen(64)
+        except OSError:
+            listener.close()
+            raise
+        return listener
 
     def start(self) -> 'SessionEdge':
         self._acceptor.start()
+        self._controller.start()
         return self
+
+    @property
+    def listening_ports(self) -> List[int]:
+        """The ports the edge listens on for the server, besides its own."""
+        with self._lock:
+            return sorted(self._ports)
 
     def close(self) -> None:
         """Stop accepting, close every client, and wait for session threads."""
         self._closing.set()
-        try:
-            self._listener.close()
-        except OSError:
-            pass
+        with self._lock:
+            listeners = [self._listener, *self._ports.values()]
+            self._ports.clear()
+        for listener in listeners:
+            try:
+                listener.close()
+            except OSError:
+                pass
+        with self._control_lock:
+            if self._control is not None:
+                self._control.close()
         self._acceptor.join(timeout=5)
+        self._controller.join(timeout=5)
         for thread in list(self._threads):
             thread.join(timeout=5)
 
@@ -358,25 +472,128 @@ class SessionEdge:
 
     def _accept_loop(self) -> None:
         while not self._closing.is_set():
-            try:
-                readable, _, _ = select.select([self._listener], [], [], 0.1)
-                if not readable:
-                    continue
-                client, address = self._listener.accept()
-            except OSError:
-                return
-            session = Session(secrets.token_bytes(16), f"tcp:{address[0]}:{address[1]}".encode())
             with self._lock:
-                self.sessions[session.session_id] = session
-            thread = threading.Thread(target=self._serve, args=(client, session),
-                                      name='session-edge-client', daemon=True)
-            self._threads.append(thread)
-            thread.start()
+                listeners = {self._listener: 0, **{sock: port for port, sock in self._ports.items()}}
+            try:
+                readable, _, _ = select.select(list(listeners), [], [], 0.1)
+            except (OSError, ValueError):
+                if self._listener.fileno() < 0:
+                    return
+                continue
+            for listener in readable:
+                try:
+                    client, address = listener.accept()
+                except OSError:
+                    continue
+                session = Session(secrets.token_bytes(16), f"tcp:{address[0]}:{address[1]}".encode(),
+                                  listen_port=listeners[listener])
+                self._start_session(client, session)
 
-    def _attach(self, session: Session, previous_pid: Optional[int]) -> Optional[Carrier]:
-        """Attach the session to whichever server is listening, or return None."""
-        deadline = time.monotonic() + self.hold
-        while not self._closing.is_set() and time.monotonic() < deadline:
+    def _start_session(self, client: socket.socket, session: Session) -> None:
+        with self._lock:
+            self.sessions[session.session_id] = session
+        thread = threading.Thread(target=self._serve, args=(client, session),
+                                  name='session-edge-client', daemon=True)
+        self._threads.append(thread)
+        thread.start()
+
+    def _control_loop(self) -> None:
+        """Keep a control attachment open and act on what arrives on it."""
+        previous_pid = None
+        while not self._closing.is_set():
+            carrier = self._connect(previous_pid, deadline=None)
+            if carrier is None:
+                return
+            hello = Hello(secrets.token_bytes(16), self.edge_id, 1, MODE_INITIAL,
+                          origin=b'control', kind=KIND_CONTROL)
+            try:
+                carrier.hello(hello)
+            except (AttachRefused, ProtocolError, OSError) as error:
+                log.warning("control attachment refused: %s", error)
+                carrier.close()
+                previous_pid = carrier.pid
+                time.sleep(self.retry_interval)
+                continue
+            with self._control_lock:
+                self._control = carrier
+            try:
+                self._control_frames(carrier, carrier.take_pending())
+                while not self._closing.is_set():
+                    try:
+                        frame = carrier.read_frame(0.1)
+                    except socket.timeout:
+                        continue
+                    if frame is None:
+                        break
+                    self._control_frames(carrier, [frame])
+            except (OSError, ProtocolError):
+                pass
+            finally:
+                with self._control_lock:
+                    self._control = None
+                previous_pid = carrier.pid
+                carrier.close()
+
+    def _control_frames(self, carrier: Carrier, frames: List[Frame]) -> None:
+        for frame in frames:
+            if frame.type == LISTENERS:
+                self._set_ports(decode_listeners(frame.payload))
+            elif frame.type == CONNECT:
+                request = Connect.decode(frame.payload)
+                thread = threading.Thread(target=self._connect_outbound, args=(request,),
+                                          name='session-edge-connect', daemon=True)
+                self._threads.append(thread)
+                thread.start()
+            else:
+                raise ProtocolError(f"unexpected frame type {frame.type} on control attachment")
+
+    def _set_ports(self, ports: List[int]) -> None:
+        """Listen on exactly the given ports, besides the edge's own."""
+        wanted = set(ports)
+        with self._lock:
+            for port in set(self._ports) - wanted:
+                self._ports.pop(port).close()
+            missing = wanted - set(self._ports)
+        for port in missing:
+            try:
+                listener = self._bind(port)
+            except OSError as error:
+                log.warning("cannot listen on port %d: %s", port, error)
+                continue
+            with self._lock:
+                self._ports[port] = listener
+
+    def _connect_outbound(self, request: Connect) -> None:
+        scheme = 'tls' if request.flags & CONNECT_TLS else 'tcp'
+        try:
+            remote = socket.create_connection((request.host, request.port),
+                                              timeout=request.timeout or None)
+            if request.flags & CONNECT_TLS:
+                remote = self.tls_context.wrap_socket(remote, server_hostname=request.host)
+                # A TLS record may carry no application data (a session
+                # ticket, say), so a blocking read could wait indefinitely.
+                remote.setblocking(False)
+            else:
+                remote.settimeout(None)
+        except (OSError, ssl.SSLError) as error:
+            code = FAILED_RESOURCES if isinstance(error, OSError) and error.errno in (
+                errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM) else FAILED_DESTINATION
+            with self._control_lock:
+                if self._control is not None:
+                    try:
+                        self._control.send(encode_connect_failed(request.request, code, str(error)))
+                    except OSError:
+                        pass
+            return
+        session = Session(secrets.token_bytes(16), f"{scheme}:{request.host}:{request.port}".encode(),
+                          kind=KIND_OUTBOUND, request=request.request)
+        with self._lock:
+            self.sessions[session.session_id] = session
+        self._serve(remote, session)
+
+    def _connect(self, previous_pid: Optional[int], deadline: Optional[float]) -> Optional[Carrier]:
+        """Connect to whichever server is listening, other than previous_pid."""
+        while not self._closing.is_set() and (deadline is None or time.monotonic() < deadline):
             try:
                 carrier = Carrier(self.socket_path)
             except OSError as error:
@@ -389,16 +606,24 @@ class SessionEdge:
                 carrier.close()
                 time.sleep(self.retry_interval)
                 continue
-            session.generation += 1
-            try:
-                carrier.hello(session.hello(self.edge_id))
-            except AttachRefused:
-                carrier.close()
-                return None
-            session.attachments.append(session.mode)
-            session.mode = MODE_CRASH
             return carrier
         return None
+
+    def _attach(self, session: Session, previous_pid: Optional[int]) -> Optional[Carrier]:
+        """Attach the session to whichever server is listening, or return None."""
+        carrier = self._connect(previous_pid, time.monotonic() + self.hold)
+        if carrier is None:
+            return None
+        session.generation += 1
+        try:
+            carrier.hello(session.hello(self.edge_id))
+        except AttachRefused:
+            carrier.close()
+            return None
+        session.attachments.append(session.mode)
+        session.mode = MODE_CRASH
+        session.request = 0
+        return carrier
 
     def _serve(self, client: socket.socket, session: Session) -> None:
         carrier = None
@@ -415,6 +640,8 @@ class SessionEdge:
                     readable = []
                 else:
                     readable, _, _ = select.select([client, carrier.sock], [], [], 0.1)
+                    if isinstance(client, ssl.SSLSocket) and client.pending() and client not in readable:
+                        readable.append(client)
                     if carrier.sock in readable:
                         outcome = self._from_server(client, carrier, session)
                 if outcome == 'closed':
@@ -425,7 +652,12 @@ class SessionEdge:
                     carrier = None
                     continue
                 if client in readable:
-                    data = client.recv(65536)
+                    try:
+                        data = client.recv(65536)
+                    except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                        continue
+                    except (ConnectionResetError, ssl.SSLError):
+                        data = b''
                     if not data:
                         try:
                             carrier.send(encode_frame(CLOSE))
@@ -475,7 +707,7 @@ class SessionEdge:
                     session.mode = MODE_CRASH
                     return 'detached'
                 try:
-                    client.sendall(payload)
+                    write_all(client, payload)
                 except OSError:
                     try:
                         carrier.send(encode_frame(CLOSE))
