@@ -7,6 +7,7 @@ without the switch (no "[+N|-N]" in their usage message) are skipped.
 """
 
 import socket
+import time
 
 import pytest
 
@@ -52,6 +53,20 @@ def wizard(candidate_server, instance):
     return client
 
 
+def log_with(instance, text: str, timeout: float = 5.0) -> str:
+    """Return the server log once it contains text, or as it stands at timeout.
+
+    The lookup helper is a forked process that logs its own start, so its line
+    can land after the server is already accepting connections.
+    """
+    deadline = time.monotonic() + timeout
+    log = instance.get_log_contents()
+    while text not in log and time.monotonic() < deadline:
+        time.sleep(0.05)
+        log = instance.get_log_contents()
+    return log
+
+
 def try_open(client, host: str, port: int) -> str:
     """Call open_network_connection(), returning its result or the error raised."""
     return client.eval_expect_success(f'`open_network_connection("{host}", {port}) ! ANY\'')
@@ -62,13 +77,13 @@ class TestDnsSwitch:
 
     def test_dns_enabled_by_default(self, start_server):
         """Without the switch, DNS is enabled and the lookup helper starts."""
-        log = start_server().get_log_contents()
+        log = log_with(start_server(), HELPER_STARTED)
         assert DNS_ENABLED in log
         assert HELPER_STARTED in log
 
     def test_plus_n_enables_dns(self, start_server):
         """+N enables DNS and starts the lookup helper."""
-        log = start_server('+N').get_log_contents()
+        log = log_with(start_server('+N'), HELPER_STARTED)
         assert DNS_ENABLED in log
         assert HELPER_STARTED in log
 
