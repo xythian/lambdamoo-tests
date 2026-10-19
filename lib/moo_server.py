@@ -62,6 +62,10 @@ class MooClient(ClientProtocol):
     # Traceback: multi-line error with "(End of traceback)"
     EVAL_TRACEBACK_PATTERN = re.compile(r'^#[^:]+:.*line\s+\d+:', re.MULTILINE)
 
+    # How long connect() and authenticate() wait for the server's first reply.
+    # Matches the fixed 0.1s sleep plus 0.05s drain they used before.
+    SETTLE_TIMEOUT = 0.15
+
     def __init__(self, host: str = 'localhost', port: int = 7777,
                  timeout: float = 5.0, trace: bool = False, trace_file=None):
         self.host = host
@@ -120,8 +124,7 @@ class MooClient(ClientProtocol):
         self._connected = True
 
         # Read initial connection output (welcome message, etc.)
-        time.sleep(0.1)
-        self._read_available()
+        self._read_available(first_timeout=self.SETTLE_TIMEOUT)
 
     def close(self) -> None:
         """Close the connection."""
@@ -161,9 +164,14 @@ class MooClient(ClientProtocol):
             self._log_trace('RECV', result)
         return result
 
-    def _read_available(self, timeout: float = 0.05) -> str:
-        """Read any immediately available data."""
-        self._socket.settimeout(timeout)
+    def _read_available(self, timeout: float = 0.05, first_timeout: Optional[float] = None) -> str:
+        """Read data until none arrives for timeout seconds.
+
+        Args:
+            timeout: How long to wait for more data once some has arrived.
+            first_timeout: How long to wait for the first data, if different.
+        """
+        self._socket.settimeout(timeout if first_timeout is None else first_timeout)
         data = []
         try:
             while True:
@@ -171,6 +179,7 @@ class MooClient(ClientProtocol):
                 if not chunk:
                     break
                 data.append(chunk.decode('utf-8', errors='replace'))
+                self._socket.settimeout(timeout)
         except socket.timeout:
             pass
         finally:
@@ -205,8 +214,7 @@ class MooClient(ClientProtocol):
     def authenticate(self, identity: str) -> bool:
         """Authenticate as a user (e.g., 'Wizard')."""
         self._send(f"connect {identity}")
-        time.sleep(0.1)
-        response = self._read_available()
+        response = self._read_available(first_timeout=self.SETTLE_TIMEOUT)
         # Check for indicators of successful connection
         return "***" not in response.lower() or "connected" in response.lower()
 
@@ -316,7 +324,7 @@ class MooServer(ServerProtocol):
                 # Check for binding errors
                 if 'Address already in use' in content:
                     return None
-            time.sleep(0.1)
+            time.sleep(0.01)
         return None
 
     def _wait_for_ready(self, port: int, timeout: float = 10.0) -> bool:
@@ -332,7 +340,7 @@ class MooServer(ServerProtocol):
                     return True
             except socket.error:
                 pass
-            time.sleep(0.1)
+            time.sleep(0.01)
         return False
 
     def start(self, database: Path, port: Optional[int] = None,
