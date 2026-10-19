@@ -290,6 +290,8 @@ def add_edge_parser(subparsers):
 Examples:
   ./moo input.db output.db /path/to/moo.sock &
   lmt edge /path/to/moo.sock --port 7777
+  ./moo input.db output.db -t 7443 /path/to/moo.sock &
+  lmt edge /path/to/moo.sock --port 7777 --tls-cert cert.pem --tls-key key.pem
 """
     )
     parser.add_argument("socket", help="The server's session socket")
@@ -297,13 +299,16 @@ Examples:
     parser.add_argument("--port", type=int, default=7777, help="Port to accept clients on")
     parser.add_argument("--hold", type=float, default=30.0,
                         help="Seconds to hold a client while no server accepts its session")
+    parser.add_argument("--tls-cert", help="Certificate chain for TLS ports the server opens "
+                                           "without naming one (listen() with tls, or -t)")
+    parser.add_argument("--tls-key", help="Private key for --tls-cert")
     return parser
 
 
 def cmd_edge(args):
     """Run the reference edge until interrupted."""
     from lib.session import serve
-    return serve(args.socket, args.host, args.port, args.hold)
+    return serve(args.socket, args.host, args.port, args.hold, args.tls_cert, args.tls_key)
 
 
 def add_test_parser(subparsers):

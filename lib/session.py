@@ -53,6 +53,8 @@ KIND_CONTROL = 2
 
 CONNECT_TLS = 1
 
+LISTEN_TLS = 1
+
 FAILED_DESTINATION = 1
 FAILED_RESOURCES = 2
 
@@ -78,6 +80,7 @@ BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
 CONNECT_FIXED = struct.Struct('>IHHIH2x')
 CONNECT_FAILED_FIXED = struct.Struct('>IB3x')
+LISTEN_FIXED = struct.Struct('>HHHH')
 
 _LENGTHS = {
     HELLO: (HELLO_FIXED.size, MAX_CONTROL),
@@ -89,7 +92,7 @@ _LENGTHS = {
     CLOSE: (0, MAX_CONTROL),
     ERROR: (0, MAX_CONTROL),
     BIND: (BIND_PAYLOAD.size, BIND_PAYLOAD.size),
-    LISTENERS: (0, 2 * MAX_LISTENERS),
+    LISTENERS: (0, MAX_CONTROL),
     CONNECT: (CONNECT_FIXED.size + 1, MAX_CONTROL),
     CONNECT_FAILED: (CONNECT_FAILED_FIXED.size, MAX_CONTROL),
 }
@@ -211,9 +214,41 @@ def decode_bind(payload: bytes) -> Tuple[int, int]:
     return BIND_PAYLOAD.unpack(payload)
 
 
-def decode_listeners(payload: bytes) -> List[int]:
-    """Return the ports a LISTENERS frame names."""
-    return list(struct.unpack(f'>{len(payload) // 2}H', payload))
+@dataclass(frozen=True)
+class Listen:
+    """One port a LISTENERS frame asks the edge to accept clients on."""
+    port: int
+    tls: bool = False
+    certificate: Optional[str] = None
+    key: Optional[str] = None
+
+
+def decode_listeners(payload: bytes) -> List[Listen]:
+    """Return the ports a LISTENERS frame names.
+
+    Raises:
+        ProtocolError: an entry is truncated, repeats a port or sets an unknown flag.
+    """
+    listens: List[Listen] = []
+    offset = 0
+    while offset < len(payload):
+        if offset + LISTEN_FIXED.size > len(payload):
+            raise ProtocolError("truncated LISTENERS entry")
+        port, flags, certificate_length, key_length = LISTEN_FIXED.unpack_from(payload, offset)
+        offset += LISTEN_FIXED.size
+        end = offset + certificate_length + key_length
+        if (end > len(payload) or not port or flags & ~LISTEN_TLS
+                or any(listen.port == port for listen in listens)
+                or (certificate_length or key_length) and not flags & LISTEN_TLS
+                or bool(certificate_length) != bool(key_length)):
+            raise ProtocolError("invalid LISTENERS entry")
+        certificate = payload[offset:offset + certificate_length].decode() or None
+        key = payload[offset + certificate_length:end].decode() or None
+        listens.append(Listen(port, bool(flags & LISTEN_TLS), certificate, key))
+        offset = end
+    if len(listens) > MAX_LISTENERS:
+        raise ProtocolError("too many LISTENERS entries")
+    return listens
 
 
 @dataclass
@@ -368,6 +403,14 @@ class Session:
                      self.kind, self.listen_port, self.request)
 
 
+@dataclass
+class PortListener:
+    """A port the edge accepts clients on, and how."""
+    listen: Listen
+    sock: socket.socket
+    context: Optional[ssl.SSLContext] = None
+
+
 def write_all(sock: socket.socket, data: bytes) -> None:
     """Send all of data, waiting while a non-blocking socket is full."""
     view = memoryview(data)
@@ -393,22 +436,30 @@ class SessionEdge:
     A control attachment, reopened whenever it ends, carries the server's
     LISTENERS and CONNECT requests. Ports the server listens on stay open
     while no server is attached, so clients that arrive then are held too.
+    The edge terminates TLS on ports the server asks for with TLS, so the
+    server only ever sees plain bytes.
     """
 
     def __init__(self, socket_path: str, host: str = '127.0.0.1', port: int = 0,
                  hold: float = 30.0, retry_interval: float = 0.05,
-                 tls_context: Optional[ssl.SSLContext] = None):
+                 tls_context: Optional[ssl.SSLContext] = None,
+                 certificate: Optional[str] = None, key: Optional[str] = None):
         """Listen for clients on host:port, the server's main listener.
 
         Args:
             tls_context: verifies outbound TLS connections; defaults to the
                 system's trusted certificates.
+            certificate: the edge's own certificate chain file, for TLS ports
+                the server asks for without naming one.
+            key: the private key file for certificate.
         """
         self.socket_path = str(socket_path)
         self.host = host
         self.hold = hold
         self.retry_interval = retry_interval
         self.tls_context = tls_context or ssl.create_default_context()
+        self.certificate = certificate
+        self.key = key
         self.edge_id = secrets.token_bytes(16)
         self.sessions: Dict[bytes, Session] = {}
         self._lock = threading.Lock()
@@ -416,7 +467,7 @@ class SessionEdge:
         self._closing = threading.Event()
         self._listener = self._bind(port)
         self.port = self._listener.getsockname()[1]
-        self._ports: Dict[int, socket.socket] = {}
+        self._ports: Dict[int, PortListener] = {}
         self._control: Optional[Carrier] = None
         self._control_lock = threading.Lock()
         self._acceptor = threading.Thread(target=self._accept_loop, name='session-edge', daemon=True)
@@ -449,7 +500,7 @@ class SessionEdge:
         """Stop accepting, close every client, and wait for session threads."""
         self._closing.set()
         with self._lock:
-            listeners = [self._listener, *self._ports.values()]
+            listeners = [self._listener, *(p.sock for p in self._ports.values())]
             self._ports.clear()
         for listener in listeners:
             try:
@@ -473,7 +524,8 @@ class SessionEdge:
     def _accept_loop(self) -> None:
         while not self._closing.is_set():
             with self._lock:
-                listeners = {self._listener: 0, **{sock: port for port, sock in self._ports.items()}}
+                listeners = {self._listener: PortListener(Listen(0), self._listener),
+                             **{p.sock: p for p in self._ports.values()}}
             try:
                 readable, _, _ = select.select(list(listeners), [], [], 0.1)
             except (OSError, ValueError):
@@ -485,17 +537,32 @@ class SessionEdge:
                     client, address = listener.accept()
                 except OSError:
                     continue
-                session = Session(secrets.token_bytes(16), f"tcp:{address[0]}:{address[1]}".encode(),
-                                  listen_port=listeners[listener])
-                self._start_session(client, session)
+                port = listeners[listener]
+                scheme = 'tls' if port.context else 'tcp'
+                session = Session(secrets.token_bytes(16),
+                                  f"{scheme}:{address[0]}:{address[1]}".encode(),
+                                  listen_port=port.listen.port)
+                thread = threading.Thread(target=self._serve_accepted,
+                                          args=(client, session, port.context),
+                                          name='session-edge-client', daemon=True)
+                self._threads.append(thread)
+                thread.start()
 
-    def _start_session(self, client: socket.socket, session: Session) -> None:
+    def _serve_accepted(self, client: socket.socket, session: Session,
+                        context: Optional[ssl.SSLContext]) -> None:
+        """Finish the TLS handshake, if the port has one, then serve the client."""
+        if context is not None:
+            try:
+                client.settimeout(10.0)
+                client = context.wrap_socket(client, server_side=True)
+                client.setblocking(False)
+            except (OSError, ssl.SSLError) as error:
+                log.info("TLS handshake failed: %s", error)
+                client.close()
+                return
         with self._lock:
             self.sessions[session.session_id] = session
-        thread = threading.Thread(target=self._serve, args=(client, session),
-                                  name='session-edge-client', daemon=True)
-        self._threads.append(thread)
-        thread.start()
+        self._serve(client, session)
 
     def _control_loop(self) -> None:
         """Keep a control attachment open and act on what arrives on it."""
@@ -547,21 +614,41 @@ class SessionEdge:
             else:
                 raise ProtocolError(f"unexpected frame type {frame.type} on control attachment")
 
-    def _set_ports(self, ports: List[int]) -> None:
-        """Listen on exactly the given ports, besides the edge's own."""
-        wanted = set(ports)
+    def _server_context(self, listen: Listen) -> Optional[ssl.SSLContext]:
+        """Return the context to accept TLS with on a port, or None for plain TCP.
+
+        Raises:
+            ValueError: the port wants TLS but there is no certificate for it.
+            OSError, ssl.SSLError: the certificate or key cannot be loaded.
+        """
+        if not listen.tls:
+            return None
+        certificate, key = listen.certificate or self.certificate, listen.key or self.key
+        if not certificate:
+            raise ValueError("TLS requested, but the edge has no certificate")
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        context.load_cert_chain(certificate, key)
+        return context
+
+    def _set_ports(self, listens: List[Listen]) -> None:
+        """Listen on exactly the given ports, besides the edge's own.
+
+        A port whose settings changed is opened again with the new ones.
+        """
+        wanted = {listen.port: listen for listen in listens}
         with self._lock:
-            for port in set(self._ports) - wanted:
-                self._ports.pop(port).close()
-            missing = wanted - set(self._ports)
-        for port in missing:
+            for port in [p for p, current in self._ports.items() if wanted.get(p) != current.listen]:
+                self._ports.pop(port).sock.close()
+            missing = [listen for port, listen in wanted.items() if port not in self._ports]
+        for listen in missing:
             try:
-                listener = self._bind(port)
-            except OSError as error:
-                log.warning("cannot listen on port %d: %s", port, error)
+                context = self._server_context(listen)
+                listener = self._bind(listen.port)
+            except (OSError, ValueError, ssl.SSLError) as error:
+                log.warning("cannot listen on port %d: %s", listen.port, error)
                 continue
             with self._lock:
-                self._ports[port] = listener
+                self._ports[listen.port] = PortListener(listen, listener, context)
 
     def _connect_outbound(self, request: Connect) -> None:
         scheme = 'tls' if request.flags & CONNECT_TLS else 'tcp'
@@ -755,14 +842,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument('--port', type=int, default=7777)
     parser.add_argument('--hold', type=float, default=30.0,
                         help='seconds to hold a client while no server accepts its session')
+    parser.add_argument('--tls-cert', help='certificate chain for TLS ports the server opens')
+    parser.add_argument('--tls-key', help='private key for --tls-cert')
     args = parser.parse_args(argv)
 
-    return serve(args.socket, args.host, args.port, args.hold)
+    return serve(args.socket, args.host, args.port, args.hold, args.tls_cert, args.tls_key)
 
 
-def serve(socket_path: str, host: str, port: int, hold: float) -> int:
+def serve(socket_path: str, host: str, port: int, hold: float,
+          certificate: Optional[str] = None, key: Optional[str] = None) -> int:
     """Run an edge in the foreground until interrupted."""
-    edge = SessionEdge(socket_path, host, port, hold).start()
+    edge = SessionEdge(socket_path, host, port, hold, certificate=certificate, key=key).start()
     print(f"edge listening on {host}:{edge.port}, server socket {socket_path}", flush=True)
     try:
         while True:

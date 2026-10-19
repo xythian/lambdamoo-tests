@@ -1,9 +1,10 @@
-"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-012).
+"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-016).
 
 A session server listens only on its Unix socket. Ports opened with listen()
 and connections made with open_network_connection() are the edge's: the
 server asks for them over the edge's control attachment, so they belong to
-the edge's process and outlast the server.
+the edge's process and outlast the server. The edge also terminates TLS for
+ports the server asks for with the "tls" option, and for the -t port.
 """
 
 import shutil
@@ -13,6 +14,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -89,22 +91,50 @@ class Remote:
         self.listener.close()
 
 
+class TlsClient(MooClient):
+    """A client that connects with TLS, trusting the test certificate."""
+
+    def __init__(self, port: int, context: ssl.SSLContext):
+        super().__init__(host='127.0.0.1', port=port, timeout=5.0)
+        self.context = context
+
+    def connect(self) -> None:
+        sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+        self._socket = self.context.wrap_socket(sock, server_hostname='localhost')
+        self._connected = True
+        self._read_available(first_timeout=self.SETTLE_TIMEOUT)
+
+
+class Certificate(NamedTuple):
+    """A self-signed certificate for localhost, its files, and contexts using it."""
+    server: ssl.SSLContext
+    client: ssl.SSLContext
+    cert: Path
+    key: Path
+
+
 class NetWorld:
     """A session server started with +O, its edge, and a Wizard client."""
 
     def __init__(self, manager, database: Path, socket_path: Path, outbound: bool = True,
-                 tls_context: ssl.SSLContext = None):
+                 tls_context: ssl.SSLContext = None, extra_args=(),
+                 certificate: Certificate = None):
         self.manager = manager
         self.socket_path = socket_path
-        self.args = ['+O' if outbound else '-O']
+        self.args = ['+O' if outbound else '-O', *extra_args]
         self.instance = manager.start(database=database, session_socket=socket_path,
                                       extra_args=self.args)
-        self.edge = SessionEdge(str(socket_path), hold=15.0, tls_context=tls_context).start()
+        self.edge = SessionEdge(str(socket_path), hold=15.0, tls_context=tls_context,
+                                certificate=certificate and str(certificate.cert),
+                                key=certificate and str(certificate.key)).start()
         self.clients = []
         self.wizard = self.connect(self.edge.port, 'Wizard')
 
-    def connect(self, port: int, player: str) -> MooClient:
-        client = MooClient(host='127.0.0.1', port=port, timeout=5.0)
+    def connect(self, port: int, player: str, tls: ssl.SSLContext = None) -> MooClient:
+        if tls:
+            client = TlsClient(port, tls)
+        else:
+            client = MooClient(host='127.0.0.1', port=port, timeout=5.0)
         client.connect()
         client.authenticate(player)
         self.clients.append(client)
@@ -143,13 +173,13 @@ def certificate(tmp_path):
     server = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     server.load_cert_chain(cert, key)
     client = ssl.create_default_context(cafile=str(cert))
-    return server, client
+    return Certificate(server, client, cert, key)
 
 
 @pytest.fixture
 def tls_world(requires_session, candidate_server, multiplayer_db, tmp_path, certificate):
     world = NetWorld(candidate_server, multiplayer_db, tmp_path / "moo.sock",
-                     tls_context=certificate[1])
+                     tls_context=certificate.client, certificate=certificate)
     yield world
     world.close()
 
@@ -284,7 +314,7 @@ class TestOutboundTls:
 
     def test_snt_010_outbound_tls(self, tls_world, certificate):
         """SNT-010: {{"tls", 1}} makes the edge connect with TLS, verifying the host."""
-        remote = Remote(tls_context=certificate[0])
+        remote = Remote(tls_context=certificate.server)
         try:
             conn = tls_world.wizard.eval_expect_success(
                 f'open_network_connection("localhost", {remote.port}, {{{{"tls", 1}}}})')
@@ -297,10 +327,72 @@ class TestOutboundTls:
 
     def test_snt_011_outbound_tls_unverified(self, tls_world, certificate):
         """SNT-011: a certificate that doesn't match the host name is refused."""
-        remote = Remote(tls_context=certificate[0])
+        remote = Remote(tls_context=certificate.server)
         try:
             assert error_of(tls_world.wizard, 
                 f'open_network_connection("127.0.0.1", {remote.port}, {{{{"tls", 1}}}})') \
                 == 'E_INVARG'
         finally:
             remote.close()
+
+
+class TestListenTls:
+    """The edge accepts TLS clients on ports the server asks for with TLS."""
+
+    def test_snt_013_listen_tls_with_edge_certificate(self, tls_world, certificate):
+        """SNT-013: {{"tls", 1}} makes the edge accept TLS on the port, with its
+        own certificate, and the server sees a "tls:" connection."""
+        port = free_port()
+        assert tls_world.wizard.eval_expect_success(f'listen(#0, {port}, {{{{"tls", 1}}}})') \
+            == str(port)
+        assert wait_until(lambda: port in tls_world.edge.listening_ports)
+
+        player2 = tls_world.connect(port, 'Player2', tls=certificate.client)
+        assert player2.eval_expect_success('player') == '#4'
+        local = player2._socket.getsockname()[1]
+        assert tls_world.wizard.eval_expect_success('connection_name(#4)') == \
+            f'"tls:127.0.0.1:{local}"'
+
+    def test_snt_014_listen_tls_with_named_certificate(self, net_world, certificate):
+        """SNT-014: "certificate" and "key" name the files the edge accepts TLS
+        with, so an edge with no certificate of its own can serve the port."""
+        port = free_port()
+        net_world.wizard.eval_expect_success(
+            f'listen(#0, {port}, {{{{"tls", 1}}, {{"certificate", "{certificate.cert}"}}, '
+            f'{{"key", "{certificate.key}"}}}})')
+        assert wait_until(lambda: port in net_world.edge.listening_ports)
+        player2 = net_world.connect(port, 'Player2', tls=certificate.client)
+        assert player2.eval_expect_success('player') == '#4'
+
+    def test_snt_015_listen_tls_options(self, net_world):
+        """SNT-015: "certificate" and "key" need "tls" and each other, and must be strings."""
+        wizard = net_world.wizard
+        port = free_port()
+        assert error_of(wizard, f'listen(#0, {port}, {{{{"certificate", "c.pem"}}}})') \
+            == 'E_INVARG'
+        assert error_of(wizard, f'listen(#0, {port}, {{{{"tls", 1}}, {{"key", "k.pem"}}}})') \
+            == 'E_INVARG'
+        assert error_of(wizard, f'listen(#0, {port}, {{{{"tls", 1}}, {{"certificate", 1}}}})') \
+            == 'E_TYPE'
+        assert error_of(wizard, f'listen(#0, {port}, {{{{"listener", #0}}}})') == 'E_INVARG'
+        assert wizard.eval_expect_success('listeners()').count(str(port)) == 0
+
+    def test_snt_016_main_tls_port_survives_restart(self, requires_session, candidate_server,
+                                                    multiplayer_db, tmp_path, certificate):
+        """SNT-016: -t PORT has the edge accept TLS clients for #0 on that port,
+        and a player who came in on it resumes after a graceful restart."""
+        port = free_port()
+        world = NetWorld(candidate_server, multiplayer_db, tmp_path / "moo.sock",
+                         extra_args=['-t', str(port)], certificate=certificate)
+        try:
+            assert wait_until(lambda: port in world.edge.listening_ports)
+            player2 = world.connect(port, 'Player2', tls=certificate.client)
+            assert player2.eval_expect_success('player') == '#4'
+            assert world.wizard.eval_expect_success('connection_name(#4)').startswith('"tls:')
+
+            new = world.graceful_restart()
+            assert wait_until(lambda: "SESSION REATTACHED: #4" in new.get_log_contents(), 10)
+            assert player2.eval_expect_success('player') == '#4'
+            assert port in world.edge.listening_ports
+        finally:
+            world.close()
