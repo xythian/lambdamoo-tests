@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -343,6 +344,14 @@ Build spec format:
         "--keep-artifacts",
         action="store_true",
         help="Keep test artifacts (databases, logs) after test run"
+    )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=default_test_jobs(),
+        metavar="N",
+        help="Run tests in N parallel workers (default: %(default)s; use 1 to run serially, "
+             "e.g. with --moo-trace)"
     )
     parser.add_argument(
         "-k",
@@ -889,6 +898,15 @@ def cmd_roundtrip(args):
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def default_test_jobs() -> int:
+    """Return the default number of parallel test workers.
+
+    Most of a test's time is spent waiting on a server process, so the suite
+    keeps getting faster with several workers per CPU.
+    """
+    return min(16, 4 * (os.cpu_count() or 1))
+
+
 def cmd_test(args):
     """Execute the test command."""
     import subprocess
@@ -947,6 +965,9 @@ def cmd_test(args):
 
     if args.keep_artifacts:
         pytest_cmd.append("--keep-artifacts")
+
+    if args.jobs > 1:
+        pytest_cmd.extend(["-n", str(args.jobs)])
 
     if args.keyword:
         pytest_cmd.extend(["-k", args.keyword])

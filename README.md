@@ -256,9 +256,17 @@ lmt test -m persistence
 # Keep test artifacts for debugging
 lmt test --keep-artifacts
 
+# Run serially (tests run in parallel workers by default; see below)
+lmt test -j 1 -- --moo-trace -k test_connection
+
 # Pass additional pytest arguments
 lmt test -- -v --tb=long
 ```
+
+`lmt test` runs tests in parallel with pytest-xdist, four workers per CPU up
+to 16, because most of each test is spent waiting on its own server process.
+Set the count with `-j N`; `-j 1` runs serially, which keeps `--moo-trace`
+output readable. Plain `pytest` runs serially unless given `-n N`.
 
 **Build spec format** (same for `--build` and after `=` in `--prior-build`):
 - `repo` - Use repo's default config (name derived from repo)
