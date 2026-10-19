@@ -31,6 +31,7 @@ Usage:
 import argparse
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -205,6 +206,24 @@ def build_with_script(
     return binary_dst
 
 
+def configured_flags(source_dir: Path) -> Optional[List[str]]:
+    """Return the flags the source tree was last configured with.
+
+    Args:
+        source_dir: Path to the source tree.
+
+    Returns:
+        The configure arguments recorded in config.status, or None if the
+        tree has not been configured.
+    """
+    if not (source_dir / "config.status").exists():
+        return None
+    result = run_cmd(["./config.status", "--config"], cwd=source_dir)
+    if result.returncode != 0:
+        return None
+    return shlex.split(result.stdout)
+
+
 def build_from_source(
     source_dir: Path,
     output_dir: Path,
@@ -239,6 +258,14 @@ def build_from_source(
     env = {**os.environ, **build_env} if build_env else None
 
     # Standard autoconf/configure/make build
+    # A tree configured with other flags must be reconfigured and rebuilt,
+    # or make reuses the old configuration
+    needs_configure = not (source_dir / "Makefile").exists()
+    if not needs_configure and configured_flags(source_dir) != shlex.split(configure_flags):
+        print("Configure flags changed; reconfiguring...")
+        needs_configure = True
+        clean = True
+
     # Clean if requested
     if clean and (source_dir / "Makefile").exists():
         print("Running make clean...")
@@ -255,7 +282,7 @@ def build_from_source(
             raise RuntimeError(f"No configure script and no configure.ac in {source_dir}")
 
     # Configure if needed
-    if not (source_dir / "Makefile").exists():
+    if needs_configure:
         print("Running configure...")
         configure_cmd = ["./configure"]
         if configure_flags:
