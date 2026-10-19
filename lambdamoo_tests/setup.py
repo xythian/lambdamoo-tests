@@ -6,6 +6,7 @@ It can use an existing MOO binary or build one from source.
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -120,6 +121,45 @@ def find_minimal_db(config=None) -> Optional[Path]:
     return None
 
 
+def _write_db_with_emergency_commands(moo_binary: Path, input_db: Path, output_db: Path,
+                                      commands: str) -> bool:
+    """Run commands against input_db in emergency mode and save the result as output_db.
+
+    The server writes to a temporary file that is then renamed over output_db,
+    so parallel test workers sharing the database cache never see a missing
+    or half-written database.
+
+    Returns:
+        True if output_db was written, False otherwise.
+    """
+    print(f"Creating {output_db.name}...")
+
+    tmp_db = output_db.with_name(f".{output_db.stem}-{os.getpid()}.db")
+
+    try:
+        result = subprocess.run(
+            [str(moo_binary), '-e', str(input_db), str(tmp_db)],
+            input=commands,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            print(f"Error creating {output_db.name}: {result.stderr}")
+            return False
+
+        if not tmp_db.exists():
+            print(f"  Failed to create {output_db.name}")
+            return False
+
+        os.replace(tmp_db, output_db)
+        print(f"  {output_db.name} created ({output_db.stat().st_size} bytes)")
+        return True
+    finally:
+        tmp_db.unlink(missing_ok=True)
+
+
 def setup_test_database(moo_binary: Path, input_db: Path, output_dir: Path) -> bool:
     """Set up Test.db with programmer support using emergency mode.
 
@@ -141,30 +181,7 @@ def setup_test_database(moo_binary: Path, input_db: Path, output_dir: Path) -> b
 quit
 '''
 
-    print(f"Creating Test.db...")
-
-    # Remove old output if exists
-    if output_db.exists():
-        output_db.unlink()
-
-    result = subprocess.run(
-        [str(moo_binary), '-e', str(input_db), str(output_db)],
-        input=commands,
-        capture_output=True,
-        text=True,
-        timeout=30
-    )
-
-    if result.returncode != 0:
-        print(f"Error creating Test.db: {result.stderr}")
-        return False
-
-    if output_db.exists():
-        print(f"  Test.db created ({output_db.stat().st_size} bytes)")
-        return True
-
-    print("  Failed to create Test.db")
-    return False
+    return _write_db_with_emergency_commands(moo_binary, input_db, output_db, commands)
 
 
 def setup_multiplayer_database(moo_binary: Path, input_db: Path, output_dir: Path) -> bool:
@@ -201,30 +218,7 @@ def setup_multiplayer_database(moo_binary: Path, input_db: Path, output_dir: Pat
 quit
 '''
 
-    print(f"Creating Multiplayer.db...")
-
-    # Remove old output if exists
-    if output_db.exists():
-        output_db.unlink()
-
-    result = subprocess.run(
-        [str(moo_binary), '-e', str(input_db), str(output_db)],
-        input=commands,
-        capture_output=True,
-        text=True,
-        timeout=30
-    )
-
-    if result.returncode != 0:
-        print(f"Error creating Multiplayer.db: {result.stderr}")
-        return False
-
-    if output_db.exists():
-        print(f"  Multiplayer.db created ({output_db.stat().st_size} bytes)")
-        return True
-
-    print("  Failed to create Multiplayer.db")
-    return False
+    return _write_db_with_emergency_commands(moo_binary, input_db, output_db, commands)
 
 
 def ensure_test_db(moo_binary: Path, db_dir: Path, config=None) -> Optional[Path]:
