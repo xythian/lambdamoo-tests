@@ -1,4 +1,4 @@
-"""Session backend: sessions surviving server replacement (SES-001 through SES-012).
+"""Session backend: sessions surviving server replacement (SES-001 through SES-014).
 
 These run only against servers built with --enable-net=session. Clients
 connect over TCP to the reference edge in lib/session.py, which carries each
@@ -289,3 +289,44 @@ class TestServerReplacement:
         assert wait_for_eof(client, timeout=10.0)
         assert f"SESSION REATTACHED: {player}" not in third.get_log_contents()
         assert f"SESSION RECOVERED: {player}" not in third.get_log_contents()
+
+    RECORD_DISCONNECTS = (
+        'o = create(#-1); add_property(#0, "server_options", o, {player, "r"}); '
+        'add_property(o, "session_resume_timeout", 1, {player, "r"}); '
+        'add_property(#0, "gone", {}, {player, "rw"}); '
+        'add_verb(#0, {player, "rxd", "user_disconnected"}, {"this", "none", "this"}); '
+        'set_verb_code(#0, "user_disconnected", {"#0.gone = {@#0.gone, args[1]};"}); '
+        'return 1;')
+
+    def record_disconnects(self, client: MooClient) -> None:
+        """Make #0 record user_disconnected calls in #0.gone, and give
+        recorded connections one second to be resumed."""
+        program = self.RECORD_DISCONNECTS.replace('\\', '\\\\').replace('"', '\\"')
+        assert client.eval_expect_success(f'eval("{program}")') == '{1, 1}'
+
+    def test_ses_013_unresumed_connection_disconnects(self, world):
+        """SES-013: a connection the loaded database recorded, which no edge
+        resumes within session_resume_timeout, gets user_disconnected."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        self.record_disconnects(client)
+
+        new = world.crash_restart()
+        assert wait_for_eof(client, timeout=10.0)
+        world.wait_for_log(f"SESSION NOT RESUMED: {player}", instance=new)
+
+        fresh = world.connect()
+        assert fresh.eval_expect_success('#0.gone') == f'{{{player}}}'
+
+    def test_ses_014_resumed_connection_is_not_disconnected(self, world):
+        """SES-014: a connection that is resumed never gets user_disconnected,
+        even after session_resume_timeout passes."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        self.record_disconnects(client)
+
+        new = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=new)
+        time.sleep(2.0)
+        assert client.eval_expect_success('#0.gone') == '{}'
+        assert "SESSION NOT RESUMED" not in new.get_log_contents()

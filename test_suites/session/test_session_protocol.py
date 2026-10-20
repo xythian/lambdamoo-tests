@@ -1,4 +1,4 @@
-"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-017).
+"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-020).
 
 These speak protocol 1.0 to the server directly, as an edge would, to check
 the handshake, positions, acknowledgements and the server's refusal of frames
@@ -6,6 +6,7 @@ and attachments the specification does not allow.
 """
 
 import secrets
+import socket
 import time
 
 import pytest
@@ -254,3 +255,66 @@ class TestConnectionInfo:
                 b'{"remote-host", "client.example"}, {"remote-address", "192.0.2.10"}, '
                 b'{"remote-port", 40000}, {"tls-server-name", "moo.example"}}') \
             in attached.eval('connection_info(player)')
+
+
+class TestOutputBound:
+    """A session whose edge isn't reading keeps a bounded output queue."""
+
+    LINE = 's = "x"; while (length(s) < 1000) s = s + s; endwhile; '
+
+    @staticmethod
+    def run(attached, program: str) -> int:
+        """Run PROGRAM through eval() without reading output until it has
+        finished, and return the integer it returns."""
+        start = len(attached.output)
+        literal = '"' + program.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        attached.send(f';eval({literal})[2]\n'.encode())
+        time.sleep(1.0)
+        attached.collect(b'=> ', timeout=20.0)
+        output = attached.collect(b'\r\n', timeout=5.0)[start:]
+        return output, int(output.rsplit(b'=> ', 1)[1].split(b'\r\n')[0])
+
+    def test_spr_018_overflow_drops_oldest_output(self, session_server):
+        """SPR-018: when output outruns the edge, the server drops the oldest
+        unsent lines and says so, as the TCP backend does, and positions run
+        on without a gap."""
+        attached = Attached(session_server.socket_path)
+        attached.login()
+        output, queued = self.run(attached, self.LINE +
+                                  'for i in [1..2000] notify(player, tostr(i, " ", s)); endfor '
+                                  'return buffered_output_length(player);')
+        assert b'>> Network buffer overflow: ' in output
+        assert b'2000 xx' in output
+        assert queued < 200000
+
+    def test_spr_019_no_flush_notify_fails_when_full(self, session_server):
+        """SPR-019: notify() with no-flush returns 0 rather than drop output
+        when the queue is full."""
+        attached = Attached(session_server.socket_path)
+        attached.login()
+        output, returned = self.run(attached, self.LINE +
+                                    'for i in [1..2000] if (!notify(player, s, 1)) return i; endif '
+                                    'endfor return 0;')
+        assert 0 < returned < 2000
+        assert b'Network buffer overflow' not in output
+
+
+class TestInputFlowControl:
+    """The server's only input flow control is to stop reading the carrier."""
+
+    def test_spr_020_held_input_stops_carrier_reads(self, session_server):
+        """SPR-020: once a connection's queued input passes the limit, the
+        server stops reading its carrier, so an edge writing more blocks
+        instead of the server buffering it."""
+        attached = Attached(session_server.socket_path)
+        attached.login()
+        attached.eval('set_connection_option(player, "hold-input", 1)')
+        line = b'say ' + b'x' * 1000 + b'\n'
+        attached.carrier.sock.settimeout(3.0)
+        sent = 0
+        with pytest.raises(socket.timeout):
+            while sent < 64 * 1024 * 1024:
+                attached.send(line * 64)
+                sent += len(line) * 64
+        assert sent < 16 * 1024 * 1024
+        assert session_server.is_running()
