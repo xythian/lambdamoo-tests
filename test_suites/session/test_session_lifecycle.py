@@ -44,11 +44,11 @@ class SessionWorld:
         return client
 
     def session_for(self, client: MooClient):
-        origin = f"tcp:127.0.0.1:{client._socket.getsockname()[1]}".encode()
+        port = client._socket.getsockname()[1]
         for session in self.edge.sessions.values():
-            if session.origin == origin:
+            if dict(session.connection).get('remote-port') == port:
                 return session
-        raise AssertionError(f"edge has no session for {origin!r}")
+        raise AssertionError(f"edge has no session for client port {port}")
 
     def wait_for_log(self, text: str, instance=None, timeout: float = 10.0) -> str:
         instance = instance or self.instance
@@ -141,11 +141,17 @@ def short_hold_world(requires_session, candidate_server, minimal_db, tmp_path):
 class TestNewSessions:
     """New sessions behave like ordinary connections."""
 
-    def test_ses_001_connection_name_is_edge_origin(self, world):
-        """SES-001: connection_name() reports the origin the edge asserted."""
+    def test_ses_001_connection_described_by_edge(self, world):
+        """SES-001: connection_name() reads as it would on the TCP backend, and
+        connection_info() lists what the edge reported about the client."""
         client = world.connect()
         port = client._socket.getsockname()[1]
-        assert client.eval_expect_success('connection_name(player)') == f'"tcp:127.0.0.1:{port}"'
+        assert client.eval_expect_success('connection_name(player)') == \
+            f'"port {world.edge.port} from 127.0.0.1, port {port}"'
+        assert client.eval_expect_success('connection_info(player)') == \
+            (f'{{{{"direction", "inbound"}}, {{"transport", "tcp"}}, '
+             f'{{"local-port", {world.edge.port}}}, {{"remote-address", "127.0.0.1"}}, '
+             f'{{"remote-port", {port}}}}}')
 
     def test_ses_002_login_binds_session(self, world):
         """SES-002: logging in sends BIND naming the player and listener."""

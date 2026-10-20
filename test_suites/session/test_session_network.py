@@ -199,7 +199,7 @@ class TestListen:
         assert player2.eval_expect_success('player') == '#4'
         local = player2._socket.getsockname()[1]
         assert net_world.wizard.eval_expect_success('connection_name(#4)') == \
-            f'"tcp:127.0.0.1:{local}"'
+            f'"port {port} from 127.0.0.1, port {local}"'
         session = next(s for s in net_world.edge.sessions.values() if s.player == 4)
         assert session.listen_port == port
 
@@ -244,8 +244,10 @@ class TestOutbound:
             conn = net_world.wizard.eval_expect_success(
                 f'open_network_connection("127.0.0.1", {remote.port})')
             assert conn.startswith('#-')
-            assert net_world.wizard.eval_expect_success(f'connection_name({conn})') == \
-                f'"tcp:127.0.0.1:{remote.port}"'
+            name = net_world.wizard.eval_expect_success(f'connection_name({conn})')
+            assert name.startswith('"port ') and name.endswith(f' to 127.0.0.1, port {remote.port}"')
+            info = net_world.wizard.eval_expect_success(f'connection_info({conn})')
+            assert info.startswith('{{"direction", "outbound"}, {"transport", "tcp"}')
             net_world.wizard.eval_expect_success(f'notify({conn}, "hello")')
             assert remote.wait_for(b'hello\r\n')
             net_world.wizard.eval_expect_success(f'boot_player({conn})')
@@ -320,8 +322,10 @@ class TestOutboundTls:
         try:
             conn = tls_world.wizard.eval_expect_success(
                 f'open_network_connection("localhost", {remote.port}, {{{{"tls", 1}}}})')
-            assert tls_world.wizard.eval_expect_success(f'connection_name({conn})') == \
-                f'"tls:localhost:{remote.port}"'
+            name = tls_world.wizard.eval_expect_success(f'connection_name({conn})')
+            assert name.endswith(f' to localhost, port {remote.port}"')
+            info = tls_world.wizard.eval_expect_success(f'connection_info({conn})')
+            assert '{"transport", "tls"}' in info and '{"remote-host", "localhost"}' in info
             tls_world.wizard.eval_expect_success(f'notify({conn}, "secret")')
             assert remote.wait_for(b'secret\r\n')
         finally:
@@ -343,7 +347,7 @@ class TestListenTls:
 
     def test_snt_013_listen_tls_with_edge_certificate(self, tls_world, certificate):
         """SNT-013: {{"tls", 1}} makes the edge accept TLS on the port, with its
-        own certificate, and the server sees a "tls:" connection."""
+        own certificate, and connection_info() reports the TLS transport."""
         port = free_port()
         assert tls_world.wizard.eval_expect_success(f'listen(#0, {port}, {{{{"tls", 1}}}})') \
             == str(port)
@@ -353,7 +357,8 @@ class TestListenTls:
         assert player2.eval_expect_success('player') == '#4'
         local = player2._socket.getsockname()[1]
         assert tls_world.wizard.eval_expect_success('connection_name(#4)') == \
-            f'"tls:127.0.0.1:{local}"'
+            f'"port {port} from 127.0.0.1, port {local}"'
+        assert '{"transport", "tls"}' in tls_world.wizard.eval_expect_success('connection_info(#4)')
 
     def test_snt_014_listen_tls_with_named_certificate(self, net_world, certificate):
         """SNT-014: "certificate" and "key" name the files the edge accepts TLS
@@ -390,7 +395,7 @@ class TestListenTls:
             assert wait_until(lambda: port in world.edge.listening_ports)
             player2 = world.connect(port, 'Player2', tls=certificate.client)
             assert player2.eval_expect_success('player') == '#4'
-            assert world.wizard.eval_expect_success('connection_name(#4)').startswith('"tls:')
+            assert '{"transport", "tls"}' in world.wizard.eval_expect_success('connection_info(#4)')
 
             new = world.graceful_restart()
             assert wait_until(lambda: "SESSION REATTACHED: #4" in new.get_log_contents(), 10)

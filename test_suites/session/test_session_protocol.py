@@ -1,4 +1,4 @@
-"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-013).
+"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-017).
 
 These speak protocol 1.0 to the server directly, as an edge would, to check
 the handshake, positions, acknowledgements and the server's refusal of frames
@@ -13,14 +13,17 @@ import pytest
 from lib.session import (
     ACK, BIND, CLOSE, DIR_INPUT, HEADER, HELLO, MAGIC, MODE_CRASH,
     HELLO_FIXED, MODE_GRACEFUL, MODE_INITIAL, OUTPUT, WELCOME, Carrier, Hello, decode_ack,
-    decode_bind, decode_data, encode_frame, encode_input,
+    decode_bind, decode_data, describe_connection, encode_fields, encode_frame, encode_input,
 )
 
+CONNECTION = describe_connection('tcp', 7777, ('192.0.2.10', 40000))
 
-def new_hello(mode=MODE_INITIAL, player=-(2 ** 63), listener=-(2 ** 63), origin=b'test:origin',
+
+def new_hello(mode=MODE_INITIAL, player=-(2 ** 63), listener=-(2 ** 63), fields=CONNECTION,
               database=bytes(16)):
     return Hello(secrets.token_bytes(16), secrets.token_bytes(16), 1, mode,
-                 player=player, listener=listener, origin=origin, database=database)
+                 player=player, listener=listener, fields=encode_fields(fields),
+                 database=database)
 
 
 class Attached:
@@ -115,6 +118,31 @@ class TestHandshake:
         assert carrier.is_closed()
         assert 'SESSION REATTACHED' not in session_server.get_log_contents()
 
+    @pytest.mark.parametrize('fields', [
+        pytest.param(CONNECTION[:-1], id='missing-remote-port'),
+        pytest.param(CONNECTION[1:], id='missing-transport'),
+        pytest.param((('transport', 7),) + CONNECTION[1:], id='integer-transport'),
+        pytest.param(CONNECTION + (('transport', 'tls'),), id='duplicate'),
+        pytest.param(CONNECTION + (('direction', 'outbound'),), id='server-owned-name'),
+        pytest.param(CONNECTION + (('Remote-Host', 'x'),), id='bad-name'),
+        pytest.param(CONNECTION + (('remote-host', 'a\nb'),), id='control-character'),
+        pytest.param(CONNECTION[:3] + (('remote-port', 70000),), id='port-out-of-range'),
+    ])
+    def test_spr_014_bad_connection_fields_are_refused(self, session_server, fields):
+        """SPR-014: a client session must describe its connection with the
+        required fields, each once, with the right types and printable values."""
+        carrier = Carrier(str(session_server.socket_path))
+        carrier.send(encode_frame(HELLO, new_hello(fields=fields).encode()))
+        assert carrier.is_closed()
+
+    def test_spr_015_truncated_connection_field_is_refused(self, session_server):
+        """SPR-015: connection fields must fill the HELLO exactly."""
+        hello = new_hello()
+        hello.fields = hello.fields[:-1]
+        carrier = Carrier(str(session_server.socket_path))
+        carrier.send(encode_frame(HELLO, hello.encode()))
+        assert carrier.is_closed()
+
     def test_spr_004_first_frame_must_be_hello(self, session_server):
         """SPR-004: any other first frame ends the attachment."""
         carrier = Carrier(str(session_server.socket_path))
@@ -198,3 +226,31 @@ class TestData:
             time.sleep(0.05)
         assert "CLIENT DISCONNECTED: Wizard" in session_server.get_log_contents()
 
+
+
+class TestConnectionInfo:
+    """What the server makes of a session's connection fields."""
+
+    def test_spr_016_connection_name_uses_tcp_format(self, session_server):
+        """SPR-016: connection_name() reads as the TCP backend's would, naming
+        the remote host when the edge resolved one."""
+        attached = Attached(session_server.socket_path)
+        attached.login()
+        assert b'=> "port 7777 from 192.0.2.10, port 40000"' in attached.eval('connection_name(player)')
+
+        named = Attached(session_server.socket_path, new_hello(
+            fields=describe_connection('tcp', 7777, ('192.0.2.10', 40000), 'client.example')))
+        named.collect(b'***')
+        assert b'=> "port 7777 from client.example, port 40000"' in named.eval('connection_name(player)')
+
+    def test_spr_017_connection_info_lists_fields(self, session_server):
+        """SPR-017: connection_info() lists the server's direction followed by
+        every field the edge sent, extra ones included, with their types."""
+        fields = describe_connection('tls', 7443, ('192.0.2.10', 40000), 'client.example') + \
+            (('tls-server-name', 'moo.example'),)
+        attached = Attached(session_server.socket_path, new_hello(fields=fields))
+        attached.login()
+        assert (b'=> {{"direction", "inbound"}, {"transport", "tls"}, {"local-port", 7443}, '
+                b'{"remote-host", "client.example"}, {"remote-address", "192.0.2.10"}, '
+                b'{"remote-port", 40000}, {"tls-server-name", "moo.example"}}') \
+            in attached.eval('connection_info(player)')

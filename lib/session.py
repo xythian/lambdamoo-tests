@@ -28,7 +28,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 MAGIC = 0x4D534553
 VERSION_MAJOR = 1
@@ -150,6 +150,48 @@ class FrameReader:
         return frames
 
 
+FIELD_STRING = 1
+FIELD_INTEGER = 2
+MAX_FIELDS = 32
+
+ConnectionField = Tuple[str, Union[str, int]]
+
+
+def encode_fields(fields: Tuple[ConnectionField, ...]) -> bytes:
+    """Encode connection fields for a HELLO.
+
+    Each field is a name of [a-z0-9-], a type byte, then a u16-length string
+    or an i64.
+    """
+    out = bytearray()
+    for name, value in fields:
+        raw = name.encode('ascii')
+        out += struct.pack('>B', len(raw)) + raw
+        if isinstance(value, int):
+            out += struct.pack('>Bq', FIELD_INTEGER, value)
+        else:
+            data = value.encode()
+            out += struct.pack('>BH', FIELD_STRING, len(data)) + data
+    return bytes(out)
+
+
+def describe_connection(transport: str, local_port: int, address: Tuple,
+                        host: Optional[str] = None) -> Tuple[ConnectionField, ...]:
+    """The connection fields for a client or outbound connection.
+
+    Args:
+        transport: How the connection arrived, such as "tcp" or "tls".
+        local_port: The edge's port on this connection.
+        address: The remote end's (address, port).
+        host: The name the remote end is known by, if not just its address.
+    """
+    fields: List[ConnectionField] = [('transport', transport), ('local-port', local_port)]
+    if host is not None and host != address[0]:
+        fields.append(('remote-host', host))
+    fields += [('remote-address', address[0]), ('remote-port', address[1])]
+    return tuple(fields)
+
+
 @dataclass
 class Hello:
     """The HELLO an edge sends to open an attachment."""
@@ -161,7 +203,7 @@ class Hello:
     output_position: int = 0
     player: int = NO_PLAYER
     listener: int = NO_PLAYER
-    origin: bytes = b''
+    fields: bytes = b''
     kind: int = KIND_CLIENT
     listen_port: int = 0
     request: int = 0
@@ -171,7 +213,7 @@ class Hello:
         return HELLO_FIXED.pack(self.session_id, self.edge_id, self.generation, self.mode,
                                 self.kind, self.listen_port, self.request,
                                 self.input_position, self.output_position, self.player,
-                                self.listener, self.database, len(self.origin)) + self.origin
+                                self.listener, self.database, len(self.fields)) + self.fields
 
 
 @dataclass
@@ -395,7 +437,7 @@ class Carrier:
 class Session:
     """The edge's record of one session."""
     session_id: bytes
-    origin: bytes
+    connection: Tuple[ConnectionField, ...]
     generation: int = 0
     mode: int = MODE_INITIAL
     input_position: int = 0
@@ -411,7 +453,8 @@ class Session:
 
     def hello(self, edge_id: bytes) -> Hello:
         return Hello(self.session_id, edge_id, self.generation, self.mode, self.input_position,
-                     self.output_position, self.player, self.listener, self.origin,
+                     self.output_position, self.player, self.listener,
+                     encode_fields(self.connection),
                      self.kind, self.listen_port, self.request, self.database)
 
 
@@ -557,9 +600,10 @@ class SessionEdge:
                 except OSError:
                     continue
                 port = listeners[listener]
-                scheme = 'tls' if port.context else 'tcp'
+                transport = 'tls' if port.context else 'tcp'
                 session = Session(secrets.token_bytes(16),
-                                  f"{scheme}:{address[0]}:{address[1]}".encode(),
+                                  describe_connection(transport, client.getsockname()[1],
+                                                      address),
                                   listen_port=port.listen.port)
                 thread = threading.Thread(target=self._serve_accepted,
                                           args=(client, session, port.context),
@@ -591,7 +635,7 @@ class SessionEdge:
             if carrier is None:
                 return
             hello = Hello(secrets.token_bytes(16), self.edge_id, 1, MODE_INITIAL,
-                          origin=b'control', kind=KIND_CONTROL)
+                          kind=KIND_CONTROL)
             try:
                 carrier.hello(hello)
             except (AttachRefused, ProtocolError, OSError) as error:
@@ -697,7 +741,9 @@ class SessionEdge:
                     except OSError:
                         pass
             return
-        session = Session(secrets.token_bytes(16), f"{scheme}:{request.host}:{request.port}".encode(),
+        session = Session(secrets.token_bytes(16),
+                          describe_connection(scheme, remote.getsockname()[1],
+                                              remote.getpeername()[:2], request.host),
                           kind=KIND_OUTBOUND, request=request.request)
         with self._lock:
             self.sessions[session.session_id] = session
