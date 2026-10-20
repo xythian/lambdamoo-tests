@@ -10,3 +10,6 @@ pexpect>=4.8
 
 # Utilities
 packaging>=21.0
+
+# Session protocol frame checking (lib/session_protocol.py)
+kaitaistruct>=0.11

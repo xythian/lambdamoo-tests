@@ -30,6 +30,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
+import kaitaistruct
+from kaitaistruct import KaitaiStruct
+
+from lib.session_protocol import SessionProtocol
+
 MAGIC = 0x4D534553
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
@@ -128,6 +133,26 @@ def encode_frame(frame_type: int, payload: bytes = b'') -> bytes:
     return HEADER.pack(MAGIC, VERSION_MAJOR, VERSION_MINOR, frame_type, 0, 0, len(payload)) + payload
 
 
+def check_frame(raw: bytes) -> None:
+    """Check one whole frame against the protocol's Kaitai Struct description.
+
+    lib/session_protocol.py is generated from tools/kaitai/session_protocol.ksy,
+    a copy of the server's normative description of the byte layout.
+
+    Raises:
+        ProtocolError: if the frame doesn't parse, or its payload has bytes
+            the description doesn't account for.
+    """
+    try:
+        parsed = SessionProtocol.from_bytes(raw)
+    except (kaitaistruct.KaitaiStructError, EOFError, ValueError, UnicodeDecodeError) as error:
+        raise ProtocolError(f"frame doesn't match session_protocol.ksy: {error}") from error
+    for frame in parsed.frames:
+        payload = frame.payload
+        if isinstance(payload, KaitaiStruct) and not payload._io.is_eof():
+            raise ProtocolError(f"{frame.frame_type.name} payload has trailing bytes")
+
+
 class FrameReader:
     """Reassembles frames from bytes read in arbitrary pieces."""
 
@@ -138,7 +163,7 @@ class FrameReader:
         """Add bytes and return every frame they complete.
 
         Raises:
-            ProtocolError: if a header is invalid.
+            ProtocolError: if a frame is invalid.
         """
         self._buffer.extend(data)
         frames = []
@@ -151,6 +176,7 @@ class FrameReader:
                 raise ProtocolError(f"invalid length {length} for frame type {frame_type}")
             if len(self._buffer) < HEADER.size + length:
                 break
+            check_frame(bytes(self._buffer[:HEADER.size + length]))
             frames.append(Frame(frame_type, bytes(self._buffer[HEADER.size:HEADER.size + length])))
             del self._buffer[:HEADER.size + length]
         return frames
@@ -349,12 +375,20 @@ def peer_pid(sock: socket.socket) -> Optional[int]:
 class Carrier:
     """One attachment's connection to the server's session socket."""
 
-    def __init__(self, path: str, timeout: float = 5.0):
+    def __init__(self, path: str, timeout: float = 5.0, check_sent: bool = False):
         """Connect to the server's socket.
+
+        Args:
+            path: the server's session socket.
+            timeout: how long to wait for the connection.
+            check_sent: check every frame sent against the protocol's
+                description, as the reference edge does; tests that send
+                malformed frames on purpose leave it off.
 
         Raises:
             OSError: if nothing is listening at path.
         """
+        self.check_sent = check_sent
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self.sock.settimeout(timeout)
@@ -368,6 +402,8 @@ class Carrier:
 
     def send(self, data: bytes) -> None:
         """Send encoded frames."""
+        if self.check_sent:
+            check_frame(data)
         self.sock.sendall(data)
 
     def read_frame(self, timeout: Optional[float] = None) -> Optional[Frame]:
@@ -780,7 +816,7 @@ class SessionEdge:
         """Connect to whichever server is listening, other than previous_pid."""
         while not self._closing.is_set() and (deadline is None or time.monotonic() < deadline):
             try:
-                carrier = Carrier(self.socket_path)
+                carrier = Carrier(self.socket_path, check_sent=True)
             except OSError as error:
                 if error.errno not in (errno.ENOENT, errno.ECONNREFUSED, errno.EAGAIN):
                     raise
