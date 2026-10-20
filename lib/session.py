@@ -46,6 +46,7 @@ BIND = 9
 LISTENERS = 10
 CONNECT = 11
 CONNECT_FAILED = 12
+LISTEN_FAILED = 13
 
 KIND_CLIENT = 0
 KIND_OUTBOUND = 1
@@ -58,6 +59,9 @@ LISTEN_ACME = 2
 
 FAILED_DESTINATION = 1
 FAILED_RESOURCES = 2
+
+LISTEN_FAILED_PORT = 1
+LISTEN_FAILED_CERTIFICATE = 2
 
 MODE_INITIAL = 1
 MODE_GRACEFUL = 2
@@ -82,6 +86,7 @@ BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
 CONNECT_FIXED = struct.Struct('>IHHIH2x')
 CONNECT_FAILED_FIXED = struct.Struct('>IB3x')
+LISTEN_FAILED_FIXED = struct.Struct('>HB5x')
 LISTEN_FIXED = struct.Struct('>HHHHH')
 
 _LENGTHS = {
@@ -97,6 +102,7 @@ _LENGTHS = {
     LISTENERS: (0, MAX_CONTROL),
     CONNECT: (CONNECT_FIXED.size + 1, MAX_CONTROL),
     CONNECT_FAILED: (CONNECT_FAILED_FIXED.size, MAX_CONTROL),
+    LISTEN_FAILED: (LISTEN_FAILED_FIXED.size, MAX_CONTROL),
 }
 
 log = logging.getLogger(__name__)
@@ -327,6 +333,11 @@ def encode_connect_failed(request: int, code: int, reason: str) -> bytes:
     return encode_frame(CONNECT_FAILED, CONNECT_FAILED_FIXED.pack(request, code) + reason.encode()[:4096])
 
 
+def encode_listen_failed(port: int, code: int, reason: str) -> bytes:
+    """Return a LISTEN_FAILED frame."""
+    return encode_frame(LISTEN_FAILED, LISTEN_FAILED_FIXED.pack(port, code) + reason.encode()[:4096])
+
+
 def peer_pid(sock: socket.socket) -> Optional[int]:
     """Return the pid of the process at the other end of a Unix socket."""
     if not hasattr(socket, 'SO_PEERCRED'):
@@ -522,6 +533,7 @@ class SessionEdge:
         self.key = key
         self.acme = acme
         self.requested: List[Listen] = []
+        self.seen: Dict[int, Listen] = {}  # every port the server has asked for, latest spec
         self.edge_id = secrets.token_bytes(16)
         self.sessions: Dict[bytes, Session] = {}
         self._lock = threading.Lock()
@@ -704,6 +716,7 @@ class SessionEdge:
         A port whose settings changed is opened again with the new ones.
         """
         self.requested = listens
+        self.seen.update((listen.port, listen) for listen in listens)
         wanted = {listen.port: listen for listen in listens}
         with self._lock:
             for port in [p for p, current in self._ports.items() if wanted.get(p) != current.listen]:
@@ -712,12 +725,26 @@ class SessionEdge:
         for listen in missing:
             try:
                 context = self._server_context(listen)
-                listener = self._bind(listen.port)
             except (OSError, ValueError, ssl.SSLError) as error:
-                log.warning("cannot listen on port %d: %s", listen.port, error)
+                self._listen_failed(listen.port, LISTEN_FAILED_CERTIFICATE, error)
+                continue
+            try:
+                listener = self._bind(listen.port)
+            except OSError as error:
+                self._listen_failed(listen.port, LISTEN_FAILED_PORT, error)
                 continue
             with self._lock:
                 self._ports[listen.port] = PortListener(listen, listener, context)
+
+    def _listen_failed(self, port: int, code: int, error: Exception) -> None:
+        """Log that the edge can't serve PORT and tell the server."""
+        log.warning("cannot listen on port %d: %s", port, error)
+        with self._control_lock:
+            if self._control is not None:
+                try:
+                    self._control.send(encode_listen_failed(port, code, str(error)))
+                except OSError:
+                    pass
 
     def _connect_outbound(self, request: Connect) -> None:
         scheme = 'tls' if request.flags & CONNECT_TLS else 'tcp'

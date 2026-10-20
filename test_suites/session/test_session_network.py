@@ -1,4 +1,4 @@
-"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-019).
+"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-021).
 
 A session server listens only on its Unix socket. Ports opened with listen()
 and connections made with open_network_connection() are the edge's: the
@@ -432,16 +432,18 @@ class TestListenAcme:
 
     def test_snt_018_acme_names_reach_edge(self, net_world):
         """SNT-018: a list of names reaches the edge in order, and an edge that
-        can't do ACME doesn't open the port."""
+        can't do ACME doesn't open the port and says so."""
         port = free_port()
         net_world.wizard.eval_expect_success(
             f'listen(#0, {port}, {{{{"tls", 1}}, {{"acme", {{"moo.example.org", '
             f'"*.moo.example.org"}}}}}})')
-        assert wait_until(lambda: any(listen.port == port for listen in net_world.edge.requested))
-        listen = next(listen for listen in net_world.edge.requested if listen.port == port)
+        assert wait_until(lambda: port in net_world.edge.seen)
+        listen = net_world.edge.seen[port]
         assert (listen.tls, listen.certificate, listen.acme) == \
             (True, None, ('moo.example.org', '*.moo.example.org'))
         assert port not in net_world.edge.listening_ports
+        assert wait_until(lambda: f"edge can't get a certificate for port {port}"
+                          in net_world.instance.get_log_contents())
 
     def test_snt_019_acme_options(self, net_world):
         """SNT-019: "acme" needs "tls", excludes "certificate" and "key", and
@@ -462,3 +464,38 @@ class TestListenAcme:
         assert listen('{"acme", 1}') == 'E_TYPE'
         assert listen('{"acme", {"moo.example.org", 1}}') == 'E_TYPE'
         assert str(port) not in wizard.eval_expect_success('listeners()')
+
+
+class TestListenFailures:
+    """The edge tells the server about ports it can't serve."""
+
+    def test_snt_020_port_in_use(self, net_world):
+        """SNT-020: when the edge can't bind a port, the server logs it and
+        drops the listener, as if listen() had failed."""
+        blocker = socket.socket()
+        blocker.bind(('127.0.0.1', 0))
+        blocker.listen(1)
+        port = blocker.getsockname()[1]
+        try:
+            assert net_world.wizard.eval_expect_success(f'listen(#0, {port})') == str(port)
+            assert wait_until(lambda: f"edge can't listen on port {port}"
+                              in net_world.instance.get_log_contents())
+            assert wait_until(lambda: str(port) not in
+                              net_world.wizard.eval_expect_success('listeners()'))
+        finally:
+            blocker.close()
+
+    def test_snt_021_certificate_missing(self, net_world, tmp_path):
+        """SNT-021: a TLS port whose certificate the edge can't load is
+        reported and dropped, and the server's other ports are unaffected."""
+        port = free_port()
+        missing = tmp_path / "missing.pem"
+        net_world.wizard.eval_expect_success(
+            f'listen(#0, {port}, {{{{"tls", 1}}, {{"certificate", "{missing}"}}, '
+            f'{{"key", "{missing}"}}}})')
+        assert wait_until(lambda: f"edge can't get a certificate for port {port}"
+                          in net_world.instance.get_log_contents())
+        assert wait_until(lambda: str(port) not in
+                          net_world.wizard.eval_expect_success('listeners()'))
+        assert port not in net_world.edge.listening_ports
+        assert net_world.wizard.eval_expect_success('1 + 1') == '2'
