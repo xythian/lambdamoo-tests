@@ -554,7 +554,7 @@ def platform_config() -> dict:
 # Feature Detection
 # ============================================================================
 
-from lib.features import ServerFeatures, detect_features, supports_switch
+from lib.features import ServerFeatures, detect_features, is_session_build, supports_switch
 
 
 @pytest.fixture
@@ -751,3 +751,21 @@ def pytest_runtest_makereport(item, call):
                         log = '\n'.join(['... (truncated) ...'] + log_lines[-50:])
                     report.longrepr = str(report.longrepr) + \
                         f"\n\n--- Server Log (last 50 lines) ---\n{log}\n"
+
+
+# ============================================================================
+# Session Network Backend
+# ============================================================================
+
+@pytest.fixture
+def requires_session(candidate_config):
+    """Skip unless the server was built with the session network backend."""
+    if not is_session_build(candidate_config.binary):
+        pytest.skip("Test requires a server built with --enable-net=session")
+
+
+@pytest.fixture
+def requires_tcp_listeners(candidate_config):
+    """Skip on session builds, whose listen() ports are opened by the edge, not the server."""
+    if is_session_build(candidate_config.binary):
+        pytest.skip("Test requires the server's own TCP listeners; a session build's are the edge's")

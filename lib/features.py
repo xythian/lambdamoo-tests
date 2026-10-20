@@ -211,6 +211,15 @@ def supports_switch(binary: Path, letter: str) -> bool:
     return f"+{letter}|-{letter}" in server_usage(Path(binary))
 
 
+def is_session_build(binary: Path) -> bool:
+    """Check whether the server was built with the session network backend.
+
+    Such a server takes the path of a Unix socket in place of a port and
+    accepts clients only through an edge (see lib/session.py).
+    """
+    return "session-unix-socket" in server_usage(Path(binary))
+
+
 # Feature requirement constants for test marking
 REQUIRES_I64 = 'i64'
 REQUIRES_UNICODE = 'unicode'

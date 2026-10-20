@@ -1,0 +1,10 @@
+{
+  "name": "lambdamoo-tests-kaitai",
+  "private": true,
+  "description": "Compiles the session protocol's Kaitai Struct description into lib/session_protocol_ksy.py.",
+  "type": "module",
+  "dependencies": {
+    "js-yaml": "4.1.0",
+    "kaitai-struct-compiler": "0.11.0"
+  }
+}

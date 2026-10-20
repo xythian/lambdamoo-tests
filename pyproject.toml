@@ -29,6 +29,7 @@ dependencies = [
     "pytest-xdist>=3.0",
     "pexpect>=4.8",
     "packaging>=21.0",
+    "kaitaistruct>=0.11",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
