@@ -37,3 +37,40 @@ jobs:
       run: |
         # Upgrade tests need prior server builds, which CI doesn't set up
         uv run lmt test --candidate ./builds/moo -m "not upgrade"
+
+  config-matrix:
+    name: Build and Test (wp-lambdamoo waterpoint, ${{ matrix.config }} config)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # i32 covers integer width, default covers no optional features,
+        # and i64_unicode covers Unicode without waifs, XML or bitwise
+        config: [ i32, default, i64_unicode ]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf make gcc gperf bison \
+          libpcre2-dev libexpat1-dev libunistring-dev libcrypt-dev
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Build wp-lambdamoo (waterpoint, ${{ matrix.config }} config)
+      run: |
+        uv run lmt build --repo wp-lambdamoo --ref waterpoint --config ${{ matrix.config }} --output ./builds/
+
+    - name: Run Tests
+      run: |
+        # Upgrade tests need prior server builds, which CI doesn't set up
+        uv run lmt test --candidate ./builds/moo -m "not upgrade"
