@@ -26,6 +26,6 @@ def define_verb(client, obj, name, lines, perms="rxd", args=("this", "none", "th
     spec = ", ".join(moo_string(a) for a in args)
     success, result = client.eval(f'add_verb({obj}, {{{owner}, "{perms}", {moo_string(name)}}}, {{{spec}}})')
     assert success, f"add_verb {obj}:{name} failed: {result}"
-    first = name.split()[0]
+    first = name.split()[0].replace("*", "")
     success, result = client.eval(f"set_verb_code({obj}, {moo_string(first)}, {moo_list(lines)})")
     assert success and result == "{}", f"{obj}:{name} did not compile: {result}"
