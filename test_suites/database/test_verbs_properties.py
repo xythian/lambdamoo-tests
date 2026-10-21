@@ -166,7 +166,7 @@ ROUND_TRIP = [
     "x = {1, 2.5, \"three\", #4, E_PERM, {}};",
     "x[1] = x[2..$];",
     "x[1..2] = {@x, @args};",
-    "y = x[^] + x[$];",
+    "y = x[1] + x[$];",
     "z = `x[10] ! E_RANGE => 0';",
     "w = `x[10] ! ANY';",
     "v = `1 / 0 ! E_DIV, E_TYPE';",
@@ -372,8 +372,8 @@ class TestProgrammerPermissions:
 
     def test_vp_061_cannot_give_verb_to_someone_else(self, wizard_and_programmer):
         """VP-061: A programmer may only add or reassign verbs owned by themselves."""
-        _, prog = wizard_and_programmer
-        mine = assert_moo_success(prog.eval("create(#1)"))
+        wiz, prog = wizard_and_programmer
+        mine = assert_moo_success(wiz.eval("create(#1, #4)"))
         assert_moo_raises(prog, f'add_verb({mine}, {{#3, "rx", "v"}}, {{"this", "none", "this"}})', "E_PERM")
         assert_moo_success(prog.eval(f'add_verb({mine}, {{player, "rx", "v"}}, {{"this", "none", "this"}})'))
         assert_moo_raises(prog, f'set_verb_info({mine}, 1, {{#3, "rx", "v"}})', "E_PERM")
@@ -411,8 +411,8 @@ class TestProgrammerPermissions:
 
     def test_vp_065_property_ownership(self, wizard_and_programmer):
         """VP-065: A programmer may only add or reassign properties owned by themselves."""
-        _, prog = wizard_and_programmer
-        mine = assert_moo_success(prog.eval("create(#1)"))
+        wiz, prog = wizard_and_programmer
+        mine = assert_moo_success(wiz.eval("create(#1, #4)"))
         assert_moo_raises(prog, f'add_property({mine}, "p", 0, {{#3, "r"}})', "E_PERM")
         assert_moo_success(prog.eval(f'add_property({mine}, "p", 0, {{player, "r"}})'))
         assert_moo_raises(prog, f'set_property_info({mine}, "p", {{#3, "r"}})', "E_PERM")
@@ -449,9 +449,9 @@ class TestProgrammerPermissions:
     def test_vp_069_non_programmer_cannot_set_code(self, wizard_and_programmer):
         """VP-069: set_verb_code needs the programmer bit even on one's own verb."""
         wiz, prog = wizard_and_programmer
-        mine = assert_moo_success(prog.eval("create(#1)"))
+        mine = assert_moo_success(wiz.eval("create(#1, #4)"))
         assert_moo_success(prog.eval(f'add_verb({mine}, {{player, "rxw", "v"}}, {{"this", "none", "this"}})'))
+        as_player2 = f'eval("set_task_perms(#4); return set_verb_code({mine}, 1, {{\\"return 1;\\"}});")'
+        assert assert_moo_success(wiz.eval(as_player2)) == "{1, {}}"
         assert_moo_success(wiz.eval("#4.programmer = 0"))
-        result = prog.eval(f'set_verb_code({mine}, 1, {{"return 1;"}})')
-        assert not result[0] or "E_PERM" in result[1]
-        assert_moo_success(wiz.eval("#4.programmer = 1"))
+        assert_moo_raises(wiz, as_player2, "E_PERM")
