@@ -203,7 +203,7 @@ class TestSuspendResume:
     def test_task_030_resume_supplies_value(self, client, box):
         """TASK-030: resume(id, value) wakes a suspended task and suspend() returns value."""
         tid = fork_task(client, f"{box}.got = suspend();")
-        assert wait_for(client, f"length(queued_tasks())", "1") == "1"
+        assert wait_for(client, "length(queued_tasks())", "1") == "1"
         assert_moo_int(client.eval(f'resume({tid}, {{"woke", 1}})'), 0)
         assert wait_for(client, f"{box}.got", '{"woke", 1}') == '{"woke", 1}'
         assert assert_moo_success(client.eval("queued_tasks()")) == "{}"
