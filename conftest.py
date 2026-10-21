@@ -29,6 +29,7 @@ import os
 import platform
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Generator, Dict, List, Optional
 
@@ -36,6 +37,8 @@ import pytest
 
 from lib.protocol import ServerConfig, ServerPair
 from lib.moo_server import MooServer, MooClient
+from lib.assertions import assert_moo_success
+from lib.moocode import moo_string
 from harness.config import get_config
 
 
@@ -534,6 +537,52 @@ def client(server, candidate_server, request) -> Generator[MooClient, None, None
     client.authenticate('Wizard')
     yield client
     client.close()
+
+
+@pytest.fixture
+def program(client):
+    """Return a function that runs MOO statements as a verb and returns the eval result.
+
+    The verb lives on a fresh object, so tests can use statements (loops,
+    assignments, try/except) that the expression-only eval command cannot.
+    run(lines, args="", timeout=None) returns (result, elapsed_seconds);
+    run.obj is the object holding the verbs.
+    """
+    obj = assert_moo_success(client.eval('create(#1)'))
+    counter = [0]
+
+    def run(lines, args="", timeout=None):
+        counter[0] += 1
+        name = f"run{counter[0]}"
+        assert_moo_success(client.eval(
+            f'add_verb({obj}, {{player, "rxd", "{name}"}}, {{"this", "none", "this"}})'))
+        code = ", ".join(moo_string(line) for line in lines)
+        errors = assert_moo_success(client.eval(f'set_verb_code({obj}, "{name}", {{{code}}})'))
+        assert errors == '{}', f"verb did not compile: {errors}"
+        start = time.monotonic()
+        result = client.eval(f'{obj}:{name}({args})', timeout=timeout)
+        return result, time.monotonic() - start
+
+    run.obj = obj
+    return run
+
+
+@pytest.fixture
+def wizard_and_programmer(multiplayer_server, candidate_server, request):
+    """Clients on one server for the wizard (#3) and a non-wizard programmer (#4).
+
+    Player2 (#4) has the programmer bit but not the wizard bit, so it is
+    subject to the permission checks that wizards bypass.
+    """
+    trace = request.config.getoption("--moo-trace")
+    clients = []
+    for name in ("Wizard", "Player2"):
+        c = candidate_server.connect(multiplayer_server, trace=trace)
+        c.authenticate(name)
+        clients.append(c)
+    yield tuple(clients)
+    for c in clients:
+        c.close()
 
 
 # ============================================================================

@@ -7,8 +7,6 @@ SIGTERM.  Every test gives the server far longer than a correct server needs
 and then checks it still answers, so a regression fails instead of hanging.
 """
 
-import time
-
 import pytest
 
 from lib.assertions import assert_moo_error, assert_moo_success
@@ -19,26 +17,12 @@ HANG_TIMEOUT = 20.0
 
 
 @pytest.fixture
-def program(client):
-    """Return a function that runs MOO statements as a verb and returns the eval result.
-
-    The verb lives on a fresh object, so tests can use statements (loops,
-    assignments) that the expression-only eval command cannot.
-    """
-    obj = assert_moo_success(client.eval('create(#1)'))
-    counter = [0]
-
+def program(program):
+    """The shared statement runner, given time for a runaway task to be stopped."""
     def run(lines, args="", timeout=HANG_TIMEOUT):
-        counter[0] += 1
-        name = f"run{counter[0]}"
-        assert_moo_success(client.eval(f'add_verb({obj}, {{player, "rxd", "{name}"}}, {{"this", "none", "this"}})'))
-        code = ", ".join('"' + line.replace('\\', '\\\\').replace('"', '\\"') + '"' for line in lines)
-        assert_moo_success(client.eval(f'set_verb_code({obj}, "{name}", {{{code}}})'))
-        start = time.monotonic()
-        result = client.eval(f'{obj}:{name}({args})', timeout=timeout)
-        return result, time.monotonic() - start
+        return program(lines, args, timeout)
 
-    run.obj = obj
+    run.obj = program.obj
     return run
 
 

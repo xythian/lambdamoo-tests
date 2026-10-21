@@ -239,3 +239,25 @@ TYPE_STR = 2
 TYPE_ERR = 3
 TYPE_LIST = 4
 TYPE_FLOAT = 9
+
+
+def assert_moo_raises(client, expression: str, expected_error: str, message: str = ""):
+    """
+    Assert that evaluating a MOO expression raises a specific error.
+
+    The expression is wrapped in a catch expression, so the error comes back
+    as a value and is compared exactly, instead of being matched against a
+    traceback message.
+
+    Args:
+        client: Connected MooClient.
+        expression: MOO expression expected to raise.
+        expected_error: Error code, e.g. "E_INVARG".
+        message: Optional message to include on failure.
+    """
+    value = assert_moo_success(client.eval(f"`{expression} ! ANY'"), message)
+    if value != expected_error:
+        msg = f"{expression}: expected {expected_error}, got {value}"
+        if message:
+            msg = f"{message}: {msg}"
+        raise AssertionError(msg)
