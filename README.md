@@ -86,6 +86,7 @@ lmt build    # Build MOO server from source or repository
 lmt setup    # Set up test databases
 lmt clean    # Clean cached repositories and builds
 lmt test     # Run the test suite
+lmt coverage # Measure the C code coverage of the test suite
 ```
 
 **Global options:**
@@ -281,6 +282,39 @@ output readable. Plain `pytest` runs serially unless given `-n N`.
 - `--build lambdamoo:full` - Full config, name defaults to "lambdamoo_full"
 - `--build main=lambdamoo:full` - Explicit name "main"
 - `--prior-build wp=wp-lambdamoo` - Prior named "wp" using wp-lambdamoo
+
+### lmt coverage
+
+Measure which parts of the server's C source the test suite runs.
+
+```bash
+# wp-lambdamoo's waterpoint branch with the waterpoint config
+lmt coverage
+
+# A local checkout, another branch, or another config
+lmt coverage --source ../wp-lambdamoo
+lmt coverage --repo wp-lambdamoo --ref my-branch --config i64
+
+# Rerun some tests against the same build; counts start from zero each run
+lmt coverage --reuse-build -k test_arithmetic
+```
+
+It copies the source into `./coverage/build` (change the directory with
+`-o DIR`), configures it with `--enable-coverage` so the server is built at
+`-O0` with gcov instrumentation, runs the suite against it, and then uses
+[gcovr](https://gcovr.com/) to write:
+
+- `coverage/coverage.txt`: line coverage per source file
+- `coverage/html/index.html`: annotated source, line by line
+- `coverage/summary.json`: overall line, function and branch percentages
+- `coverage/coverage.json`: everything gcovr measured
+- `coverage/uncalled-builtins.txt`: builtins (`bf_*` functions) no test called
+
+It takes the same `-j`, `-k`, `-m` and pytest arguments as `lmt test`, and
+exits with pytest's status. The server writes its counts when it exits
+cleanly, so a test that crashes the server loses that server's counts.
+The server source needs the `--enable-coverage` configure option, and
+the build needs gcc or clang.
 
 ## Upgrade Testing
 
