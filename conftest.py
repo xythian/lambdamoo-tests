@@ -648,6 +648,8 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_bitwise = True
     if 'jit' in known:
         features.has_jit = True
+    if 'bound' in known:
+        features.has_bound = True
 
     return features
 
@@ -727,6 +729,20 @@ def requires_no_jit(detected_features):
     """Skip if the server WAS built with the JIT (for testing non-JIT behavior)."""
     if detected_features.has_jit:
         pytest.skip("Test requires a server built without the JIT")
+
+
+@pytest.fixture
+def requires_bound(detected_features):
+    """Skip if the server was not built with bound values (--enable-bound)."""
+    if not detected_features.has_bound:
+        pytest.skip("Test requires a server built with bound values")
+
+
+@pytest.fixture
+def requires_no_bound(detected_features):
+    """Skip if the server WAS built with bound values (for testing builds without them)."""
+    if detected_features.has_bound:
+        pytest.skip("Test requires a server built without bound values")
 
 
 @pytest.fixture

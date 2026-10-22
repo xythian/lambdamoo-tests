@@ -162,6 +162,7 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
 | `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
+| `waterpoint_bound` | Waterpoint + bound values (experimental) | waterpoint flags plus `--enable-bound=struct` |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 `wp-lambdamoo` builds its `waterpoint` branch with the `waterpoint` config unless

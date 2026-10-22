@@ -97,6 +97,18 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
         ],
         description="Waterpoint config plus the MIR-based JIT (kruton/lambdamoo JIT branches)",
     ),
+    "waterpoint_bound": BuildConfig(
+        name="waterpoint_bound",
+        configure_flags=[
+            "--enable-sz=i64",
+            "--enable-unicode",
+            "--enable-xml",
+            "--enable-waifs=dict",
+            "--enable-def-BITWISE_OPERATORS",
+            "--enable-bound=struct",
+        ],
+        description="Waterpoint config plus experimental bound values (bytes, stream, struct.cursor)",
+    ),
     "full": BuildConfig(
         name="full",
         configure_flags=[
@@ -485,6 +497,7 @@ tags_from = "https://github.com/wrog/lambdamoo"
 #   i64_unicode_waifs - 64-bit integers + Unicode + Waifs
 #   waterpoint      - Full Waterpoint config (i64 + unicode + xml + waifs)
 #   waterpoint_jit  - Waterpoint config + --enable-jit (kruton-jit)
+#   waterpoint_bound - Waterpoint config + --enable-bound=struct (experimental)
 #   full            - Full feature set (alias for waterpoint)
 
 # Add custom build configurations like this:
