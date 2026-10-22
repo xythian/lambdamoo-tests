@@ -98,6 +98,14 @@ class TestExponentsAndLogs:
         """MATH-013: log of zero and exp overflow raise E_FLOAT."""
         assert_moo_raises(client, expr, "E_FLOAT")
 
+    @pytest.mark.parametrize("expr", ["exp(-1000.0)", "2.0 ^ -2000", "j(1000000, 1.0)", "atan(1.0e-300, 1.0e300)"])
+    def test_math_014_underflow_is_zero(self, client, expr):
+        """MATH-014: A result too small to represent is 0.0, not an error.
+
+        The Programmer's Manual: "The value 0.0 is always returned on underflow."
+        """
+        assert assert_moo_success(client.eval(expr)) == "0.0"
+
 
 class TestRounding:
     """ceil, floor and trunc."""
