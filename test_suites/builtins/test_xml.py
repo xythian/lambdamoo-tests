@@ -38,6 +38,21 @@ class TestParseTree:
         """XML-004: Text that is not printable ASCII comes back as a MOO binary string."""
         assert assert_moo_success(client.eval('xml_parse_tree("<a>&#10;~</a>")')) == '{"a", {}, "~0a~7e", {}}'
 
+    def test_xml_004a_non_ascii_text_is_characters(self, client, requires_unicode):
+        """XML-004a: In a Unicode build, non-ASCII text and attribute values come back as characters."""
+        result = assert_moo_success(client.eval('xml_parse_tree("<a k=\\"&#233;\\">caf&#233; &#x1F600;</a>")'))
+        assert result == '{"a", {{"k", "\u00e9"}}, "caf\u00e9 \U0001F600", {}}'
+
+    def test_xml_004b_non_ascii_without_unicode(self, client, requires_no_unicode):
+        """XML-004b: Without Unicode, non-ASCII text comes back as the UTF-8 bytes in a binary string."""
+        result = assert_moo_success(client.eval('xml_parse_tree("<a>caf&#233;</a>")'))
+        assert result == '{"a", {}, "caf~c3~a9", {}}'
+
+    def test_xml_004c_characters_outside_moo_set_stay_escaped(self, client, requires_unicode):
+        """XML-004c: Characters MOO strings can't hold (here a noncharacter) stay ~XX escaped."""
+        result = assert_moo_success(client.eval('xml_parse_tree("<a>&#xFDD0;</a>")'))
+        assert result == '{"a", {}, "~ef~b7~90", {}}'
+
     def test_xml_005_nested_children(self, program):
         """XML-005: Children nest to any depth."""
         doc = "<r>" + "<n>" * 20 + "x" + "</n>" * 20 + "</r>"

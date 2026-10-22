@@ -285,6 +285,15 @@ class TestDisassemble:
         listing = assert_moo_success(client.eval(f'disassemble({obj}, "dv")'))
         assert opcode.replace("\\", "") in listing.replace("\\", "")
 
+    def test_admin_051a_float_literals(self, client):
+        """ADMIN-051a: Float literals are listed by value, as toliteral() prints them."""
+        obj = assert_moo_success(client.eval("create(#1)"))
+        define_verb(client, obj, "f", ["return {2.5, -0.125};"])
+        listing = assert_moo_success(client.eval(f'disassemble({obj}, "f")'))
+        assert "PUSH_LITERAL 2.5" in listing
+        assert "PUSH_LITERAL -0.125" in listing
+        assert "literal type" not in listing
+
     def test_admin_052_numeric_descriptor(self, client, obj):
         """ADMIN-052: The verb can be named by its 1-based index."""
         assert_moo_int(client.eval(f'disassemble({obj}, 1) == disassemble({obj}, "dv")'), 1)
