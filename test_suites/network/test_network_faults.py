@@ -67,8 +67,11 @@ class TestNetworkFaultRecovery:
         """A listener and a connection closed underneath the server are dropped.
 
         The rest of the server keeps working: existing connections still get
-        answers, other listeners still accept, and the wait error is not
-        logged over and over.
+        answers, other listeners still accept, the wait error is not logged
+        over and over, and the server does not spin.  (poll() reports a
+        closed descriptor as POLLNVAL and returns at once instead of failing
+        with EBADF, so a poll()-based server that ignores POLLNVAL never
+        drops the descriptor and busy-loops.)
         """
         instance, faults = faulty_server
         admin = candidate_server.connect(instance)
@@ -81,6 +84,12 @@ class TestNetworkFaultRecovery:
             candidate_server.connect(instance).close()
             time.sleep(1.0)
             assert not trigger.exists(), "Fault was never injected"
+
+            cpu_before = cpu_seconds(instance.pid)
+            time.sleep(2.0)
+            cpu_used = cpu_seconds(instance.pid) - cpu_before
+            assert cpu_used < 0.5, \
+                f"Server used {cpu_used:.1f}s of CPU in 2s with a closed descriptor in its wait set"
 
             assert admin.eval_expect_success('1 + 1') == '2'
 
