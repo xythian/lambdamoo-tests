@@ -121,6 +121,10 @@ When testing features that vary by server configuration, include both:
 - Positive tests (feature works when enabled)
 - Negative tests (feature behaves differently when disabled)
 
+## Commits and Pull Requests
+
+A person is the author of every change. Commits must not use a tool or bot identity as author or committer, and commit messages and PR bodies carry no `Co-Authored-By` trailer for a tool, no session link and no "Generated with" footer. The `attribution` workflow (`scripts/check-attribution`) fails a pull request or push that carries any of them. `git config core.hooksPath scripts/git-hooks` strips the trailers and refuses a tool author at commit time.
+
 ## Cache Locations
 
 All caches go to `~/.cache/lambdamoo-tests/`:
