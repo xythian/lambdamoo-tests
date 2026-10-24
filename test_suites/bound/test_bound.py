@@ -13,6 +13,8 @@ tested here are:
 See README.Bound in the wp-lambdamoo branch for the full interface.
 """
 
+import hashlib
+
 import pytest
 
 from lib.moocode import define_verb
@@ -26,6 +28,11 @@ from lib.assertions import (
 pytestmark = pytest.mark.bound
 
 TYPE_BOUND = 11
+
+
+def md5(data: bytes) -> str:
+    """MD5 digest in the form value_hash() returns."""
+    return hashlib.md5(data).hexdigest().upper()
 
 BYTES = 'bound_type("bytes")'
 STREAM = 'bound_type("stream")'
@@ -191,6 +198,27 @@ class TestBytes:
         assert_moo_int(client.eval(f'value_hash({BYTES}:new("hi")) == value_hash({BYTES}:new(104, 105))'), 1)
         assert_moo_int(client.eval(f'value_hash({BYTES}:new("hi")) == value_hash({BYTES}:new("ho"))'), 0)
 
+    def test_bound_041_value_hash_formula(self, client):
+        """BOUND-041: value_hash(b) hashes "[[bound bytes DIGEST]]", DIGEST being the MD5 of the octets."""
+        digest = md5(b"[[bound bytes " + md5(b"\x00hi\xff").encode() + b"]]")
+        assert_moo_string(client.eval(f'value_hash({BYTES}:new("~00hi~ff"))'), digest)
+
+    def test_bound_042_value_hash_inside_lists(self, run):
+        """BOUND-042: Bytes inside a list hash by content, so lists holding different bytes hash differently."""
+        inner = "[[bound bytes " + md5(b"hi") + "]]"
+        assert run([
+            f'a = {{1, {{{BYTES}:new("hi")}}}};',
+            f'b = {{1, {{{BYTES}:new("ho")}}}};',
+            f'c = {{1, {{{BYTES}:new(104, 105)}}}};',
+            'return {value_hash(a) == value_hash(b), value_hash(a) == value_hash(c), value_hash(a)};',
+        ]) == (True, f'{{0, 1, "{md5(("{1, {" + inner + "}}").encode())}"}}')
+
+    def test_bound_043_value_hash_without_content(self, client, requires_bound_type):
+        """BOUND-043: Handles and subtypes without a hash hook hash as their [[bound NAME]] literal."""
+        requires_bound_type("stream")
+        assert_moo_string(client.eval(f"value_hash({BYTES})"), md5(b"[[bound bytes]]"))
+        assert_moo_string(client.eval(f"value_hash({STREAM}:new())"), md5(b"[[bound stream]]"))
+
     def test_bound_039_owner_is_constructor(self, client):
         """BOUND-039: A new value is owned by the programmer that constructed it."""
         assert assert_moo_success(client.eval(f"{BYTES}:new().owner")) == \
@@ -212,6 +240,11 @@ class TestStream:
     def test_bound_050_new_stream_is_empty(self, client):
         """BOUND-050: A new stream is empty and open."""
         assert assert_moo_success(client.eval(f"{{{STREAM}:new().length, {STREAM}:new().sealed}}")) == "{0, 0}"
+
+    def test_bound_062_new_rejects_unknown_encoding(self, client):
+        """BOUND-062: stream:new() raises E_INVARG for an encoding the server can't convert."""
+        assert_moo_raises(client, f'{STREAM}:new("no-such-encoding")', "E_INVARG")
+        assert_moo_raises(client, f"{STREAM}:new(1)", "E_TYPE")
 
     def test_bound_051_appends_return_byte_counts(self, run):
         """BOUND-051: append_binary(), append_bytes() and append_text() return the octets each added."""
