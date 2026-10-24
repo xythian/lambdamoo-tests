@@ -473,7 +473,7 @@ Known repositories:
   kruton-jit    - kruton/lambdamoo's wip-jit-work branch (waterpoint_jit config)
 
 Build configurations (for --config):
-  default, i64, i64_unicode, i64_xml, i64_waifs, i64_unicode_waifs, waterpoint, waterpoint_jit, full
+  default, i64, i64_unicode, i64_xml, i64_waifs, i64_unicode_waifs, waterpoint, waterpoint_jit, waterpoint_bound, full
 """
     )
 

@@ -162,6 +162,7 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
 | `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
 | `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
+| `waterpoint_bound` | Waterpoint + bound values (experimental) | waterpoint flags plus `--enable-bound=struct` |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
 `wp-lambdamoo` builds its `waterpoint` branch with the `waterpoint` config unless
@@ -438,6 +439,7 @@ lambdamoo-tests/
     ├── builtins/           # Builtin function tests
     ├── persistence/        # Data persistence tests
     ├── jit/                # JIT correctness tests (JIT servers only)
+    ├── bound/              # Bound value tests (--enable-bound servers only)
     └── upgrade/            # Upgrade compatibility tests
 ```
 
@@ -483,6 +485,17 @@ turned on so entry counts are kept). Results must match the interpreter:
   CRC-32 (bitwise and table-driven), and merge/insertion sorts.
 
 `lib/jit.py` has the harness (`JitHarness`) and MOO literal helpers.
+
+### Bound Value Tests (`test_suites/bound/`)
+Run only on servers that list `"bound"` in `server_version("features")`
+(wp-lambdamoo's experimental bound-value branch, `waterpoint_bound` config); a
+server without it runs just the negative test that the `bound_*` builtins are
+absent. They cover type-handle lookup and reflection, the immutable `bytes`
+subtype (construction, text decoding, content equality and hashing), mutable
+`stream`s and `seal()`, `stream:read()`, `notify()` of bytes, the
+`struct.cursor` codecs and windows, and owner-only mutation.
+`test_suites/persistence/test_bound.py` checks that each subtype, and aliases
+between bound values, survive a checkpoint and restart.
 
 ## Writing Tests
 
