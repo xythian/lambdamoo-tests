@@ -60,6 +60,15 @@ def many_ticks(client):
     assert_moo_success(client.eval('load_server_options()'))
 
 
+@pytest.fixture
+def catchable_space(client):
+    """Make running out of string space raise a catchable E_QUOTA instead of aborting the task."""
+    if '"server_options"' not in assert_moo_success(client.eval('properties(#0)')):
+        assert_moo_success(client.eval('add_property(#0, "server_options", create(#1), {player, "r"})'))
+    assert_moo_success(client.eval('add_property(#0.server_options, "max_concat_catchable", 1, {player, "r"})'))
+    assert_moo_success(client.eval('load_server_options()'))
+
+
 def assert_server_responsive(client):
     """The server must still answer after the walk."""
     assert assert_moo_success(client.eval('1 + 1', timeout=HANG_TIMEOUT)) == '2'
@@ -155,6 +164,26 @@ class TestSharedSublists:
         assert elapsed < 10
         assert_server_responsive(client)
 
+    def test_value_hash_runs_out_of_space(self, client, program, catchable_space):
+        """value_hash() of a list whose literal is 2^60 braces long raises E_QUOTA quickly, like toliteral()."""
+        result, elapsed = program(shared("x") + [
+            "return {`value_hash(x) ! E_QUOTA => 0', `toliteral(x) ! E_QUOTA => 0'};",
+        ])
+        assert assert_moo_success(result) == '{0, 0}'
+        assert elapsed < 10
+        assert_server_responsive(client)
+
+    def test_value_hash_repeats_shared_output(self, client, program):
+        """A shared sublist is hashed at every place it occurs, as in its literal."""
+        result, _ = program([
+            'x = {"a", 1};',
+            'for i in [1..12]',
+            '  x = {"<", x, x, ">"};',
+            'endfor',
+            'return value_hash(x) == string_hash(toliteral(x));',
+        ])
+        assert assert_moo_success(result) == '1'
+
     def test_encode_binary_repeats_shared_output(self, client, program):
         """A shared sublist's bytes appear at every place it occurs."""
         result, _ = program([
@@ -208,6 +237,12 @@ class TestDeepNesting:
         result, _ = program(deep("x") + ['s = toliteral(x);',
                                          'return {length(s), s[1..3], s[$-2..$]};'])
         assert assert_moo_success(result) == f'{{{2 * (DEEP + 1)}, "{{{{{{", "}}}}}}"}}'
+        assert_server_responsive(client)
+
+    def test_value_hash(self, client, program, many_ticks):
+        """value_hash() hashes every brace, the same as string_hash(toliteral())."""
+        result, _ = program(deep("x") + ['return value_hash(x) == string_hash(toliteral(x));'])
+        assert assert_moo_success(result) == '1'
         assert_server_responsive(client)
 
     def test_encode_binary(self, client, program, many_ticks):

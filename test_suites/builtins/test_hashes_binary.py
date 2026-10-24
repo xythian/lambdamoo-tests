@@ -9,12 +9,40 @@ import hashlib
 
 import pytest
 
+from lib.moocode import define_verb
 from lib.assertions import (
     assert_moo_int,
     assert_moo_raises,
     assert_moo_string,
     assert_moo_success,
 )
+
+
+@pytest.fixture
+def run(client):
+    """Return a function that runs MOO statements as a verb on a fresh object and returns the eval result."""
+    obj = assert_moo_success(client.eval('create(#1)'))
+    counter = [0]
+
+    def _run(lines):
+        counter[0] += 1
+        name = f"run{counter[0]}"
+        define_verb(client, obj, name, lines)
+        return client.eval(f'{obj}:{name}()')
+    return _run
+
+
+@pytest.fixture
+def small_string_limit(client):
+    """Lower max_string_concat to 2000 and make E_QUOTA catchable; returns the limit."""
+    limit = 2000
+    if '"server_options"' not in assert_moo_success(client.eval('properties(#0)')):
+        assert_moo_success(client.eval('add_property(#0, "server_options", create(#1), {player, "r"})'))
+    assert_moo_success(client.eval(f'add_property(#0.server_options, "max_string_concat", {limit}, {{player, "r"}})'))
+    assert_moo_success(client.eval('add_property(#0.server_options, "max_concat_catchable", 1, {player, "r"})'))
+    assert_moo_success(client.eval('add_property(#0.server_options, "fg_ticks", 10000000, {player, "r"})'))
+    assert_moo_success(client.eval('load_server_options()'))
+    return limit
 
 
 def md5(data: bytes) -> str:
@@ -60,6 +88,52 @@ class TestHashes:
         """HASH-006: value_hash(v) == string_hash(toliteral(v))."""
         assert assert_moo_success(client.eval(
             'value_hash({1, "two", #3, {4.0}}) == string_hash(toliteral({1, "two", #3, {4.0}}))')) == "1"
+
+    @pytest.mark.parametrize("build", [
+        ['v = "say \\"hi\\" \\\\ back";'],
+        ['v = {};', 'for i in [1..3000]', '  v = {@v, i, tostr("s", i), #-1, E_RANGE, 1.25, {}};', 'endfor'],
+        ['v = {};', 's = "";', 'for i in [1..500]', '  s = s + "0123456789";', 'endfor',
+         'v = {s, {s, {s}}, s};'],
+        ['v = {1};', 'for i in [1..2000]', '  v = {i, v, "\\""};', 'endfor'],
+        ['v = {-9, 0.5, 1e+30, -0.0, 3.0};'],
+    ], ids=["escapes", "long-flat", "long-strings", "nested", "numbers"])
+    def test_hash_008_value_hash_equals_hash_of_literal(self, run, build):
+        """HASH-008: value_hash(v) is string_hash(toliteral(v)) for values larger than one hashing chunk."""
+        assert run(build + ['return value_hash(v) == string_hash(toliteral(v));']) == (True, "1")
+
+    def test_hash_009_value_hash_non_ascii(self, run, requires_unicode):
+        """HASH-009: Non-ASCII characters inside lists hash as their UTF-8 bytes, as in toliteral()."""
+        assert run(['v = {"é", {"日本"}, "\\"é\\""};',
+                    'return value_hash(v) == string_hash(toliteral(v));']) == (True, "1")
+
+    def test_hash_010_value_hash_waif(self, run, requires_waifs):
+        """HASH-010: A waif inside a list hashes as its [[class = ..., owner = ...]] literal."""
+        assert run(['add_property(this, ":x", 0, {player, "rw"});',
+                    'add_verb(this, {player, "rxd", "mk"}, {"this", "none", "this"});',
+                    'set_verb_code(this, "mk", {"return new_waif();"});',
+                    'v = {1, this:mk(), {this:mk()}};',
+                    'return value_hash(v) == string_hash(toliteral(v));']) == (True, "1")
+
+    @pytest.mark.parametrize("extra", [-2, -1, 0, 1, 2])
+    def test_hash_011_value_hash_space_limit(self, run, small_string_limit, extra):
+        """HASH-011: value_hash() raises E_QUOTA exactly when toliteral() of the same value does."""
+        # {"xxx...", "xxx..."} has a literal 8 longer than its two strings together
+        n = small_string_limit - 8 + extra
+        a, b = n // 2, n - n // 2
+        assert run([
+            'a = "";',
+            f'for i in [1..{a}]',
+            '  a = a + "x";',
+            'endfor',
+            'b = "";',
+            f'for i in [1..{b}]',
+            '  b = b + "x";',
+            'endfor',
+            'v = {a, b};',
+            'lit = `toliteral(v) ! E_QUOTA => 0\';',
+            'h = `value_hash(v) ! E_QUOTA => 0\';',
+            'return {lit == 0, h == 0, lit == 0 || h == string_hash(lit)};',
+        ]) == (True, "{1, 1, 1}" if extra > 0 else "{0, 0, 1}")
 
     def test_hash_007_argument_types(self, client):
         """HASH-007: string_hash and binary_hash need strings."""
