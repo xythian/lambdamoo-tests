@@ -5,13 +5,15 @@ server_version("features") and must have every builtin tested here;
 one without it has none of them.  The builtins work without Unicode too,
 treating every character as one ASCII character.
 
-string_width() (WID-001 onward)
--------------------------------
+string_width() (WID-001 onward), graphemes() (GRA-001 onward)
+-------------------------------------------------------------
 
 string_width(str) returns the number of terminal columns str occupies, so
 MOO code can pad fixed-width columns (@who and the like) around names that
 contain emoji or East Asian characters.  length() counts characters, which
-is one column short for every wide character.
+is one column short for every wide character.  It measures each grapheme
+cluster once, so an emoji ZWJ sequence or a flag is two columns, not the
+sum of its parts.  graphemes(str) splits str into those clusters.
 """
 
 import string
@@ -79,24 +81,24 @@ class TestStringWidthUnicode:
         pytest.param('\U0001F991', 2, id="emoji-squid"),
         pytest.param('\U0001F479', 2, id="emoji-ogre"),
         pytest.param('\U0001F9DB', 2, id="emoji-vampire"),
-        pytest.param('中文', 4, id="cjk-ideographs"),
-        pytest.param('한', 2, id="hangul-syllable"),
-        pytest.param('ＡＢ', 4, id="fullwidth-latin"),
-        pytest.param('ᴋᴇɴ', 3, id="small-capitals"),
-        pytest.param('café', 4, id="precomposed-accent"),
-        pytest.param('αβ', 2, id="greek"),
+        pytest.param('\u4E2D\u6587', 4, id="cjk-ideographs"),
+        pytest.param('\uD55C', 2, id="hangul-syllable"),
+        pytest.param('\uFF21\uFF22', 4, id="fullwidth-latin"),
+        pytest.param('\u1D0B\u1D07\u0274', 3, id="small-capitals"),
+        pytest.param('caf\u00E9', 4, id="precomposed-accent"),
+        pytest.param('\u03B1\u03B2', 2, id="greek"),
     ])
     def test_wid_010_character_widths(self, client, text, width):
         """WID-010: wide characters are two columns, others one."""
         assert_moo_int(client.eval(f'string_width({moo_literal(text)})'), width)
 
     @pytest.mark.parametrize("text", [
-        pytest.param('́', id="combining-acute"),
-        pytest.param('‍', id="zero-width-joiner"),
-        pytest.param('​', id="zero-width-space"),
-        pytest.param('️', id="variation-selector-16"),
-        pytest.param('­', id="soft-hyphen"),
-        pytest.param('ᅠ', id="hangul-medial-vowel"),
+        pytest.param('\u0301', id="combining-acute"),
+        pytest.param('\u200D', id="zero-width-joiner"),
+        pytest.param('\u200B', id="zero-width-space"),
+        pytest.param('\uFE0F', id="variation-selector-16"),
+        pytest.param('\u00AD', id="soft-hyphen"),
+        pytest.param('\u1160', id="hangul-medial-vowel"),
     ])
     def test_wid_011_zero_width_characters(self, client, text):
         """WID-011: combining marks and format characters take no column."""
@@ -104,7 +106,7 @@ class TestStringWidthUnicode:
 
     def test_wid_012_combining_sequence(self, client):
         """WID-012: a base letter plus a combining mark is one column, two characters."""
-        text = 'é'
+        text = 'e\u0301'
         assert_moo_int(client.eval(f'string_width({moo_literal(text)})'), 1)
         assert_moo_int(client.eval(f'length({moo_literal(text)})'), 2)
 
@@ -112,7 +114,7 @@ class TestStringWidthUnicode:
         pytest.param('\U0001F991 KRAKEN', 9, id="leading-emoji"),
         pytest.param('\U0001F525balwRog\U0001F525', 11, id="emoji-both-ends"),
         pytest.param('stuckula \U0001F9DB', 11, id="trailing-emoji"),
-        pytest.param('Franᴋᴇɴɴʏstei', 13, id="small-caps"),
+        pytest.param('Fran\u1D0B\u1D07\u0274\u0274\u028Fstei', 13, id="small-caps"),
     ])
     def test_wid_013_who_names(self, client, name, width):
         """WID-013: names from a Halloween @who are one column wider per emoji than length()."""
@@ -121,8 +123,85 @@ class TestStringWidthUnicode:
         assert_moo_int(client.eval(f'length({moo_literal(name)})'), width - emoji)
 
 
+class TestGraphemeWidth:
+    """string_width() counts each grapheme cluster once."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("text, width", [
+        pytest.param('\U0001F468\u200D\U0001F469\u200D\U0001F467', 2, id="zwj-family"),
+        pytest.param('\U0001F9DF\u200D\u2642\uFE0F', 2, id="zwj-with-selector"),
+        pytest.param('\U0001F44D\U0001F3FD', 2, id="skin-tone-modifier"),
+        pytest.param('\u2764\uFE0F', 2, id="emoji-presentation-selector"),
+        pytest.param('\u2764', 1, id="text-presentation-heart"),
+        pytest.param('1\uFE0F\u20E3', 2, id="keycap"),
+        pytest.param('\U0001F1FA\U0001F1F8', 2, id="flag"),
+        pytest.param('\U0001F1FA\U0001F1F8\U0001F1EB\U0001F1F7', 4, id="two-flags"),
+        pytest.param('\u1100\u1161\u11A8', 2, id="hangul-conjoining-jamo"),
+        pytest.param('\U0001F9DB\u200D\u2640\uFE0F Mina', 7, id="name-with-zwj-emoji"),
+    ])
+    def test_wid_014_grapheme_widths(self, client, text, width):
+        """WID-014: emoji sequences, flags and conjoining jamo are one cluster wide."""
+        assert_moo_int(client.eval(f'string_width({moo_literal(text)})'), width)
+
+
+class TestGraphemes:
+    """graphemes() splits a string into user-perceived characters (GRA-001 onward)."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext")
+
+    def test_gra_001_ascii(self, client):
+        """GRA-001: each ASCII character is its own grapheme."""
+        assert assert_moo_success(client.eval('graphemes("abc")')) == '{"a", "b", "c"}'
+
+    def test_gra_002_empty(self, client):
+        """GRA-002: the empty string has no graphemes."""
+        assert assert_moo_success(client.eval('graphemes("")')) == '{}'
+
+    def test_gra_003_wrong_type(self, client):
+        """GRA-003: a non-string argument raises E_TYPE."""
+        assert_moo_raises(client, 'graphemes(1)', 'E_TYPE')
+
+    def test_gra_004_rejoins(self, client):
+        """GRA-004: joining the graphemes gives back the string."""
+        text = PRINTABLE_ASCII
+        assert_moo_int(client.eval(f'length(graphemes({moo_literal(text)}))'), len(text))
+        result = assert_moo_success(client.eval(
+            f'tostr(@graphemes({moo_literal(text)})) == {moo_literal(text)}'))
+        assert result == '1'
+
+
+class TestGraphemesUnicode:
+    """graphemes() keeps multi-codepoint characters together."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("text, clusters", [
+        pytest.param('e\u0301x', ['e\u0301', 'x'], id="combining-mark"),
+        pytest.param('\U0001F468\u200D\U0001F469\u200D\U0001F467!',
+                     ['\U0001F468\u200D\U0001F469\u200D\U0001F467', '!'], id="zwj-family"),
+        pytest.param('\U0001F44D\U0001F3FD', ['\U0001F44D\U0001F3FD'], id="skin-tone"),
+        pytest.param('\U0001F1FA\U0001F1F8\U0001F1EB\U0001F1F7',
+                     ['\U0001F1FA\U0001F1F8', '\U0001F1EB\U0001F1F7'], id="two-flags"),
+        pytest.param('\u1100\u1161\u11A8\uD55C', ['\u1100\u1161\u11A8', '\uD55C'],
+                     id="hangul"),
+        pytest.param('\U0001F991 KRAKEN', ['\U0001F991', ' ', 'K', 'R', 'A', 'K', 'E', 'N'],
+                     id="who-name"),
+    ])
+    def test_gra_010_clusters(self, client, text, clusters):
+        """GRA-010: combining marks, ZWJ sequences, modifiers and flag pairs stay whole."""
+        expected = '{' + ', '.join(moo_literal(c) for c in clusters) + '}'
+        assert assert_moo_success(client.eval(f'graphemes({moo_literal(text)})')) == expected
+
+    def test_gra_011_truncate_without_splitting(self, client):
+        """GRA-011: truncating by graphemes never cuts an emoji sequence in half."""
+        text = 'ab\U0001F468\u200D\U0001F469\u200D\U0001F467cd'
+        result = assert_moo_success(client.eval(f'tostr(@graphemes({moo_literal(text)})[1..3])'))
+        assert result == moo_literal('ab\U0001F468\u200D\U0001F469\u200D\U0001F467')
+
+
 class TestStringWidthAscii:
-    """string_width() on a server built without Unicode."""
+    """The extension on a server built without Unicode."""
 
     pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_no_unicode")
 
@@ -131,15 +210,20 @@ class TestStringWidthAscii:
         text = PRINTABLE_ASCII + "~F0~9F~A6~91"
         assert_moo_int(client.eval(f'string_width({moo_literal(text)})'), len(text))
 
+    def test_wid_021_graphemes_are_characters(self, client):
+        """WID-021: without Unicode, each byte of a ~-escape is its own grapheme."""
+        assert assert_moo_success(client.eval('graphemes("~F0")')) == '{"~", "F", "0"}'
+
 
 class TestNoUnitext:
     """Servers built without the unitext extension."""
 
     pytestmark = pytest.mark.usefixtures("requires_no_unitext")
 
-    def test_wid_030_function_info_rejects_name(self, client):
-        """WID-030: function_info() reports no such builtin."""
-        assert_moo_raises(client, 'function_info("string_width")', 'E_INVARG')
+    @pytest.mark.parametrize("name", ["string_width", "graphemes"])
+    def test_wid_030_function_info_rejects_name(self, client, name):
+        """WID-030: function_info() reports none of the extension's builtins."""
+        assert_moo_raises(client, f'function_info("{name}")', 'E_INVARG')
 
     def test_wid_031_call_does_not_compile(self, client):
         """WID-031: code naming string_width() directly fails to compile."""
