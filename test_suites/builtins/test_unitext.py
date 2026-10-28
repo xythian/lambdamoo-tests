@@ -14,6 +14,13 @@ contain emoji or East Asian characters.  length() counts characters, which
 is one column short for every wide character.  It measures each grapheme
 cluster once, so an emoji ZWJ sequence or a flag is two columns, not the
 sum of its parts.  graphemes(str) splits str into those clusters.
+
+normalize() (NRM-001 onward), casefold() (CF-001 onward)
+--------------------------------------------------------
+
+normalize(str [, form]) returns str in Unicode normalization form NFC (the
+default), NFD, NFKC or NFKD.  casefold(str) applies full case folding, so
+names can be compared without regard to case even where == cannot (sharp s).
 """
 
 import string
@@ -200,6 +207,122 @@ class TestGraphemesUnicode:
         assert result == moo_literal('ab\U0001F468\u200D\U0001F469\u200D\U0001F467')
 
 
+def string_limit(client, limit):
+    """Make strings longer than limit bytes raise E_QUOTA."""
+    if '"server_options"' not in assert_moo_success(client.eval('properties(#0)')):
+        assert_moo_success(client.eval('add_property(#0, "server_options", create(#1), {player, "r"})'))
+    assert_moo_success(client.eval(f'add_property(#0.server_options, "max_string_concat", {limit}, {{player, "r"}})'))
+    assert_moo_success(client.eval('add_property(#0.server_options, "max_concat_catchable", 1, {player, "r"})'))
+    assert_moo_success(client.eval('load_server_options()'))
+
+
+class TestNormalize:
+    """normalize(str [, form]) (NRM-001 onward)."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext")
+
+    def test_nrm_001_ascii_unchanged(self, client):
+        """NRM-001: ASCII text is the same in every form."""
+        for form in ("NFC", "NFD", "NFKC", "NFKD"):
+            result = assert_moo_success(client.eval(f'normalize({moo_literal(PRINTABLE_ASCII)}, "{form}")'))
+            assert result == moo_literal(PRINTABLE_ASCII)
+
+    def test_nrm_002_form_names(self, client):
+        """NRM-002: the form defaults to NFC and its name ignores case."""
+        assert assert_moo_success(client.eval('normalize("abc")')) == '"abc"'
+        assert assert_moo_success(client.eval('normalize("abc", "nfkd")')) == '"abc"'
+
+    def test_nrm_003_bad_form(self, client):
+        """NRM-003: an unknown form raises E_INVARG."""
+        assert_moo_raises(client, 'normalize("abc", "NFX")', 'E_INVARG')
+        assert_moo_raises(client, 'normalize("abc", "")', 'E_INVARG')
+
+    def test_nrm_004_wrong_types(self, client):
+        """NRM-004: non-string arguments raise E_TYPE; extra ones E_ARGS."""
+        assert_moo_raises(client, 'normalize(1)', 'E_TYPE')
+        assert_moo_raises(client, 'normalize("a", 1)', 'E_TYPE')
+        assert_moo_raises(client, 'normalize("a", "NFC", 1)', 'E_ARGS')
+
+
+class TestNormalizeUnicode:
+    """Composition and compatibility mappings on a Unicode server."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("text, form, expected", [
+        pytest.param('e\u0301', 'NFC', '\u00E9', id="compose-acute"),
+        pytest.param('\u00E9', 'NFD', 'e\u0301', id="decompose-acute"),
+        pytest.param('\u00E9', 'NFC', '\u00E9', id="already-composed"),
+        pytest.param('\u1100\u1161\u11A8', 'NFC', '\uAC01', id="compose-hangul"),
+        pytest.param('\uFF21\uFF22\uFF23', 'NFKC', 'ABC', id="fullwidth-to-ascii"),
+        pytest.param('\uFF21\uFF22\uFF23', 'NFC', '\uFF21\uFF22\uFF23', id="fullwidth-kept-by-nfc"),
+        pytest.param('\uFB01', 'NFKC', 'fi', id="ligature"),
+        pytest.param('\u2460', 'NFKD', '1', id="circled-digit"),
+        pytest.param('\u1D0B', 'NFKC', '\u1D0B', id="small-capital-has-no-mapping"),
+    ])
+    def test_nrm_010_forms(self, client, text, form, expected):
+        """NRM-010: each form composes, decomposes or maps compatibility characters."""
+        result = assert_moo_success(client.eval(f'normalize({moo_literal(text)}, "{form}")'))
+        assert result == moo_literal(expected)
+
+    def test_nrm_011_makes_spellings_equal(self, client):
+        """NRM-011: two spellings of the same name compare equal once normalized."""
+        composed = moo_literal('Jos\u00E9')
+        decomposed = moo_literal('Jose\u0301')
+        result = assert_moo_success(client.eval(
+            f'{{{composed} == {decomposed}, normalize({composed}) == normalize({decomposed})}}'))
+        assert result == '{0, 1}'
+
+    def test_nrm_012_result_too_long(self, client):
+        """NRM-012: a result longer than max_string_concat raises E_QUOTA."""
+        string_limit(client, 1015)
+        text = '\uFDFA' * 100
+        assert_moo_int(client.eval(f'length(normalize({moo_literal(text)}, "NFC"))'), 100)
+        assert_moo_raises(client, f'normalize({moo_literal(text)}, "NFKD")', 'E_QUOTA')
+
+
+class TestCasefold:
+    """casefold(str) (CF-001 onward)."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext")
+
+    def test_cf_001_ascii(self, client):
+        """CF-001: ASCII letters fold to lower case; the rest is unchanged."""
+        result = assert_moo_success(client.eval(f'casefold({moo_literal(PRINTABLE_ASCII)})'))
+        assert result == moo_literal(PRINTABLE_ASCII.lower())
+
+    def test_cf_002_wrong_type(self, client):
+        """CF-002: a non-string argument raises E_TYPE."""
+        assert_moo_raises(client, 'casefold(1)', 'E_TYPE')
+
+
+class TestCasefoldUnicode:
+    """Full case folding on a Unicode server."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("text, expected", [
+        pytest.param('Stra\u00DFe', 'strasse', id="sharp-s-expands"),
+        pytest.param('\u1E9E', 'ss', id="capital-sharp-s"),
+        pytest.param('\u039F\u0394\u03A5\u03A3\u03A3\u0395\u03A5\u03A3',
+                     '\u03BF\u03B4\u03C5\u03C3\u03C3\u03B5\u03C5\u03C3', id="greek-sigma"),
+        pytest.param('\u0130', 'i\u0307', id="dotted-capital-i"),
+        pytest.param('\uFB01', 'fi', id="ligature"),
+        pytest.param('\U0001F991 KRAKEN', '\U0001F991 kraken', id="emoji-unchanged"),
+    ])
+    def test_cf_010_full_folding(self, client, text, expected):
+        """CF-010: folding uses the full mappings, which can change the length."""
+        result = assert_moo_success(client.eval(f'casefold({moo_literal(text)})'))
+        assert result == moo_literal(expected)
+
+    def test_cf_011_matches_where_equality_does_not(self, client):
+        """CF-011: == misses STRASSE vs Stra\u00DFe; casefold() makes them equal."""
+        strasse = moo_literal('Stra\u00DFe')
+        result = assert_moo_success(client.eval(
+            f'{{"STRASSE" == {strasse}, casefold("STRASSE") == casefold({strasse})}}'))
+        assert result == '{0, 1}'
+
+
 class TestStringWidthAscii:
     """The extension on a server built without Unicode."""
 
@@ -214,13 +337,17 @@ class TestStringWidthAscii:
         """WID-021: without Unicode, each byte of a ~-escape is its own grapheme."""
         assert assert_moo_success(client.eval('graphemes("~F0")')) == '{"~", "F", "0"}'
 
+    def test_wid_022_normalize_is_identity(self, client):
+        """WID-022: without Unicode, every form leaves the string alone."""
+        assert assert_moo_success(client.eval('normalize("~C3~A9", "NFKD")')) == '"~C3~A9"'
+
 
 class TestNoUnitext:
     """Servers built without the unitext extension."""
 
     pytestmark = pytest.mark.usefixtures("requires_no_unitext")
 
-    @pytest.mark.parametrize("name", ["string_width", "graphemes"])
+    @pytest.mark.parametrize("name", ["string_width", "graphemes", "normalize", "casefold"])
     def test_wid_030_function_info_rejects_name(self, client, name):
         """WID-030: function_info() reports none of the extension's builtins."""
         assert_moo_raises(client, f'function_info("{name}")', 'E_INVARG')
