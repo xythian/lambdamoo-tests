@@ -22,6 +22,12 @@ normalize(str [, form]) returns str in Unicode normalization form NFC (the
 default), NFD, NFKC or NFKD.  casefold(str) applies full case folding, so
 names can be compared without regard to case even where == cannot (sharp s).
 
+wrap() (WRP-001 onward)
+-----------------------
+
+wrap(str, width) breaks str into lines no wider than width columns, at the
+places Unicode line breaking allows, or inside a word too long for a line.
+
 char_category() and char_script() (CHR-001 onward)
 --------------------------------------------------
 
@@ -392,6 +398,85 @@ class TestCharInfoUnicode:
         assert result == '{"Latin", "Cyrillic", "Latin", "Latin", "Latin", "Latin", "Latin"}'
 
 
+def moo_list(items) -> str:
+    """Write a list of Python strings as a MOO list literal."""
+    return '{' + ', '.join(moo_literal(i) for i in items) + '}'
+
+
+SENTENCE = ("The squid surfaced beside the tent, and everyone in the living room "
+            "agreed it was the best Halloween costume this year by a mile.")
+
+
+class TestWrap:
+    """wrap(str, width) (WRP-001 onward)."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext")
+
+    @pytest.mark.parametrize("text, width, lines", [
+        pytest.param('the quick brown fox', 10, ['the quick', 'brown fox'], id="words"),
+        pytest.param('aaaa bbbb', 4, ['aaaa', 'bbbb'], id="exact-fit"),
+        pytest.param('abcdefghij', 4, ['abcd', 'efgh', 'ij'], id="long-word"),
+        pytest.param('aa    bb', 3, ['aa', 'bb'], id="spaces-dropped-at-break"),
+        pytest.param('short', 80, ['short'], id="fits"),
+        pytest.param('well-known', 6, ['well-', 'known'], id="after-hyphen"),
+        pytest.param('a   ', 10, ['a'], id="trailing-spaces"),
+        pytest.param('', 10, [], id="empty"),
+        pytest.param('   ', 10, [], id="only-spaces"),
+    ])
+    def test_wrp_001_lines(self, client, text, width, lines):
+        """WRP-001: lines break between words, or inside a word too long for a line."""
+        result = assert_moo_success(client.eval(f'wrap({moo_literal(text)}, {width})'))
+        assert result == moo_list(lines)
+
+    @pytest.mark.parametrize("width", [10, 20, 33, 79])
+    def test_wrp_002_widths_and_words_kept(self, client, width):
+        """WRP-002: no line is wider than asked, and the words come back in order.
+
+        Every width is at least as long as the longest word, so the lines are
+        what a greedy fill of whole words gives.
+        """
+        lines = assert_moo_success(client.eval(f'wrap({moo_literal(SENTENCE)}, {width})'))
+        expected = []
+        for word in SENTENCE.split(' '):
+            if expected and len(expected[-1]) + 1 + len(word) <= width:
+                expected[-1] += ' ' + word
+            else:
+                expected.append(word)
+        assert all(len(line) <= width for line in expected)
+        assert lines == moo_list(expected)
+
+    def test_wrp_003_bad_width(self, client):
+        """WRP-003: a width below 1 raises E_INVARG."""
+        assert_moo_raises(client, 'wrap("abc", 0)', 'E_INVARG')
+        assert_moo_raises(client, 'wrap("abc", -5)', 'E_INVARG')
+
+    def test_wrp_004_wrong_types(self, client):
+        """WRP-004: wrap() takes a string and an integer."""
+        assert_moo_raises(client, 'wrap(1, 10)', 'E_TYPE')
+        assert_moo_raises(client, 'wrap("abc", "10")', 'E_TYPE')
+        assert_moo_raises(client, 'wrap("abc")', 'E_ARGS')
+
+
+class TestWrapUnicode:
+    """wrap() measures display width and keeps graphemes whole."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("text, width, lines", [
+        pytest.param('\U0001F991 KRAKEN attacks', 9, ['\U0001F991 KRAKEN', 'attacks'], id="emoji-is-two-columns"),
+        pytest.param('\U0001F991 KRAKEN attacks', 8, ['\U0001F991', 'KRAKEN', 'attacks'], id="emoji-overflows"),
+        pytest.param('\u4E2D\u6587\u4E2D\u6587', 4, ['\u4E2D\u6587', '\u4E2D\u6587'], id="cjk-breaks-between-ideographs"),
+        pytest.param('ab\U0001F468\u200D\U0001F469\u200D\U0001F467', 3,
+                     ['ab', '\U0001F468\u200D\U0001F469\u200D\U0001F467'], id="zwj-sequence-kept-whole"),
+        pytest.param('\u4E2D', 1, ['\u4E2D'], id="wider-than-line"),
+        pytest.param('caf\u00E9 cre\u0300me', 5, ['caf\u00E9', 'cre\u0300me'], id="combining-mark-zero-width"),
+    ])
+    def test_wrp_010_lines(self, client, text, width, lines):
+        """WRP-010: wide characters count two columns and clusters are never split."""
+        result = assert_moo_success(client.eval(f'wrap({moo_literal(text)}, {width})'))
+        assert result == moo_list(lines)
+
+
 class TestStringWidthAscii:
     """The extension on a server built without Unicode."""
 
@@ -417,7 +502,7 @@ class TestNoUnitext:
     pytestmark = pytest.mark.usefixtures("requires_no_unitext")
 
     @pytest.mark.parametrize("name", ["string_width", "graphemes", "normalize", "casefold",
-                                      "char_category", "char_script"])
+                                      "char_category", "char_script", "wrap"])
     def test_wid_030_function_info_rejects_name(self, client, name):
         """WID-030: function_info() reports none of the extension's builtins."""
         assert_moo_raises(client, f'function_info("{name}")', 'E_INVARG')
