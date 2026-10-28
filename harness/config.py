@@ -82,8 +82,9 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-xml",
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
+            "--enable-unitext",
         ],
-        description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise)",
+        description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise + unitext)",
     ),
     "waterpoint_jit": BuildConfig(
         name="waterpoint_jit",
@@ -93,6 +94,7 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-xml",
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
+            "--enable-unitext",
             "--enable-jit",
         ],
         description="Waterpoint config plus the MIR-based JIT (kruton/lambdamoo JIT branches)",
@@ -105,8 +107,14 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-xml",
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
+            "--enable-unitext",
         ],
         description="Full feature set (alias for waterpoint)",
+    ),
+    "unitext": BuildConfig(
+        name="unitext",
+        configure_flags=["--enable-unitext"],
+        description="Default build plus the unitext extension, without Unicode",
     ),
     "bitwise": BuildConfig(
         name="bitwise",

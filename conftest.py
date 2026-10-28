@@ -94,7 +94,7 @@ def pytest_addoption(parser):
         "--candidate-features",
         action="store",
         default=None,
-        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict)"
+        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict,bitwise,jit,unitext)"
     )
 
 
@@ -648,6 +648,8 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_bitwise = True
     if 'jit' in known:
         features.has_jit = True
+    if 'unitext' in known:
+        features.has_unitext = True
 
     return features
 
@@ -727,6 +729,20 @@ def requires_no_jit(detected_features):
     """Skip if the server WAS built with the JIT (for testing non-JIT behavior)."""
     if detected_features.has_jit:
         pytest.skip("Test requires a server built without the JIT")
+
+
+@pytest.fixture
+def requires_unitext(detected_features):
+    """Skip if the Unicode text extension (--enable-unitext) is not enabled."""
+    if not detected_features.has_unitext:
+        pytest.skip("Test requires the unitext extension")
+
+
+@pytest.fixture
+def requires_no_unitext(detected_features):
+    """Skip if the unitext extension IS enabled (for testing servers without it)."""
+    if detected_features.has_unitext:
+        pytest.skip("Test requires a server without the unitext extension")
 
 
 @pytest.fixture

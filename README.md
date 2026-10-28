@@ -525,6 +525,7 @@ Available capability fixtures:
 - `requires_unicode` / `requires_no_unicode` - Unicode string support
 - `requires_waifs` / `requires_waif_dict` - Waif object support
 - `requires_xml` - XML parsing support
+- `requires_unitext` / `requires_no_unitext` - Unicode text builtins (`--enable-unitext`)
 
 The `detected_features` fixture provides direct access to the `ServerFeatures` object
 for more complex capability checks.
