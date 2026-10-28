@@ -21,9 +21,17 @@ normalize() (NRM-001 onward), casefold() (CF-001 onward)
 normalize(str [, form]) returns str in Unicode normalization form NFC (the
 default), NFD, NFKC or NFKD.  casefold(str) applies full case folding, so
 names can be compared without regard to case even where == cannot (sharp s).
+
+char_category() and char_script() (CHR-001 onward)
+--------------------------------------------------
+
+char_category(ch) returns a one-character string's Unicode General Category
+("Lu", "So", ...) and char_script(ch) its Script ("Latin", "Cyrillic",
+"Common", ...), for example to spot look-alike letters in a name.
 """
 
 import string
+import unicodedata
 
 import pytest
 
@@ -323,6 +331,67 @@ class TestCasefoldUnicode:
         assert result == '{0, 1}'
 
 
+class TestCharInfo:
+    """char_category(ch) and char_script(ch) (CHR-001 onward)."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext")
+
+    def test_chr_001_ascii_categories(self, client):
+        """CHR-001: every printable ASCII character has its Unicode General Category."""
+        calls = ', '.join(f'char_category({moo_literal(c)})' for c in PRINTABLE_ASCII)
+        result = assert_moo_success(client.eval(f'tostr(@{{{calls}}})'))
+        expected = ''.join(unicodedata.category(c) for c in PRINTABLE_ASCII)
+        assert result == moo_literal(expected)
+
+    def test_chr_002_ascii_scripts(self, client):
+        """CHR-002: ASCII letters are Latin; digits, spaces and punctuation are Common."""
+        for ch, script in (("A", "Latin"), ("z", "Latin"), ("7", "Common"),
+                           (" ", "Common"), ("~", "Common")):
+            assert assert_moo_success(client.eval(f'char_script({moo_literal(ch)})')) == moo_literal(script)
+
+    def test_chr_003_tab(self, client):
+        """CHR-003: tab is a control character in the Common script."""
+        assert assert_moo_success(client.eval('char_category(tochar(9))')) == '"Cc"'
+        assert assert_moo_success(client.eval('char_script(tochar(9))')) == '"Common"'
+
+    @pytest.mark.parametrize("fn", ["char_category", "char_script"])
+    def test_chr_004_one_character_only(self, client, fn):
+        """CHR-004: anything but a one-character string raises E_INVARG or E_TYPE."""
+        assert_moo_raises(client, f'{fn}("")', 'E_INVARG')
+        assert_moo_raises(client, f'{fn}("ab")', 'E_INVARG')
+        assert_moo_raises(client, f'{fn}(65)', 'E_TYPE')
+
+
+class TestCharInfoUnicode:
+    """Categories and scripts of non-ASCII characters."""
+
+    pytestmark = pytest.mark.usefixtures("requires_unitext", "requires_unicode")
+
+    @pytest.mark.parametrize("ch, category, script", [
+        pytest.param('\u0430', 'Ll', 'Cyrillic', id="cyrillic-a"),
+        pytest.param('\u0410', 'Lu', 'Cyrillic', id="cyrillic-capital-a"),
+        pytest.param('\u03B1', 'Ll', 'Greek', id="greek-alpha"),
+        pytest.param('\u4E2D', 'Lo', 'Han', id="han"),
+        pytest.param('\u1D0B', 'Ll', 'Latin', id="small-capital-k"),
+        pytest.param('\U0001F991', 'So', 'Common', id="emoji"),
+        pytest.param('\u0301', 'Mn', 'Inherited', id="combining-acute"),
+        pytest.param('\u200D', 'Cf', 'Inherited', id="zero-width-joiner"),
+        pytest.param('\u0661', 'Nd', 'Arabic', id="arabic-indic-digit"),
+        pytest.param('\uE000', 'Co', 'Unknown', id="private-use"),
+    ])
+    def test_chr_010_category_and_script(self, client, ch, category, script):
+        """CHR-010: non-ASCII characters report their category and script."""
+        assert assert_moo_success(client.eval(f'char_category({moo_literal(ch)})')) == moo_literal(category)
+        assert assert_moo_success(client.eval(f'char_script({moo_literal(ch)})')) == moo_literal(script)
+
+    def test_chr_011_spots_mixed_script_name(self, client):
+        """CHR-011: a Cyrillic look-alike in a Latin name shows up in its scripts."""
+        name = 'X\u0443thian'
+        calls = ', '.join(f'char_script({moo_literal(c)})' for c in name)
+        result = assert_moo_success(client.eval(f'{{{calls}}}'))
+        assert result == '{"Latin", "Cyrillic", "Latin", "Latin", "Latin", "Latin", "Latin"}'
+
+
 class TestStringWidthAscii:
     """The extension on a server built without Unicode."""
 
@@ -347,7 +416,8 @@ class TestNoUnitext:
 
     pytestmark = pytest.mark.usefixtures("requires_no_unitext")
 
-    @pytest.mark.parametrize("name", ["string_width", "graphemes", "normalize", "casefold"])
+    @pytest.mark.parametrize("name", ["string_width", "graphemes", "normalize", "casefold",
+                                      "char_category", "char_script"])
     def test_wid_030_function_info_rejects_name(self, client, name):
         """WID-030: function_info() reports none of the extension's builtins."""
         assert_moo_raises(client, f'function_info("{name}")', 'E_INVARG')
