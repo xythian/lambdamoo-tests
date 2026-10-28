@@ -10,6 +10,7 @@ Server Configuration Options (from ./configure):
 - waifs: Waif objects (--enable-waifs)
 - waif_dict: Waif dictionary syntax (--enable-waifs=dict or --enable-def-WAIF_DICT)
 - jit: Native code generation (--enable-jit, kruton/lambdamoo JIT branches)
+- unitext: Unicode text builtins such as string_width() (--enable-unitext)
 """
 
 import subprocess
@@ -36,6 +37,7 @@ class ServerFeatures:
     has_regexp: bool = False
     has_bitwise: bool = False
     has_jit: bool = False
+    has_unitext: bool = False
 
     def __post_init__(self):
         """Derive feature flags from raw options."""
@@ -49,6 +51,7 @@ class ServerFeatures:
         self.has_waifs = 'waif' in self.features or 'waifs' in self.features
         self.has_regexp = 'regexp' in self.features
         self.has_jit = 'jit' in self.features
+        self.has_unitext = 'unitext' in self.features
 
         # WAIF_DICT can be in options (True means enabled when waifs active)
         waif_dict_opt = self.options.get('WAIF_DICT')
@@ -90,6 +93,7 @@ class ServerFeatures:
             'regexp': self.has_regexp,
             'bitwise': self.has_bitwise,
             'jit': self.has_jit,
+            'unitext': self.has_unitext,
         }
         return all(feature_map.get(f, False) for f in required_features)
 
