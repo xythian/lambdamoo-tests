@@ -160,7 +160,8 @@ Use `--config <name>` to select a predefined configuration:
 | `i64_xml` | 64-bit + XML | `--enable-sz=i64 --enable-xml` |
 | `i64_waifs` | 64-bit + Waifs | `--enable-sz=i64 --enable-waifs=dict` |
 | `i64_unicode_waifs` | 64-bit + Unicode + Waifs | `--enable-sz=i64 --enable-unicode --enable-waifs=dict` |
-| `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict` |
+| `i64_ast` | 64-bit + AST builtins | `--enable-sz=i64 --enable-ast` |
+| `waterpoint` | Full feature set | `--enable-sz=i64 --enable-unicode --enable-xml --enable-waifs=dict --enable-def-BITWISE_OPERATORS --enable-unitext --enable-ast` |
 | `waterpoint_jit` | Waterpoint + JIT | waterpoint flags plus `--enable-jit` |
 | `full` | Alias for waterpoint | (same as waterpoint) |
 
@@ -526,6 +527,7 @@ Available capability fixtures:
 - `requires_waifs` / `requires_waif_dict` - Waif object support
 - `requires_xml` - XML parsing support
 - `requires_unitext` / `requires_no_unitext` - Unicode text builtins (`--enable-unitext`)
+- `requires_ast` / `requires_no_ast` - Parser builtins (`--enable-ast`)
 
 The `detected_features` fixture provides direct access to the `ServerFeatures` object
 for more complex capability checks.
