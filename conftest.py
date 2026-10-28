@@ -94,7 +94,7 @@ def pytest_addoption(parser):
         "--candidate-features",
         action="store",
         default=None,
-        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict,bitwise,jit,unitext)"
+        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict,bitwise,jit,unitext,ast)"
     )
 
 
@@ -650,6 +650,8 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_jit = True
     if 'unitext' in known:
         features.has_unitext = True
+    if 'ast' in known:
+        features.has_ast = True
 
     return features
 
@@ -680,6 +682,20 @@ def requires_xml(detected_features):
     """Skip if XML support is not enabled."""
     if not detected_features.has_xml:
         pytest.skip("Test requires XML support")
+
+
+@pytest.fixture
+def requires_ast(detected_features):
+    """Skip if the AST builtins (--enable-ast) are not built in."""
+    if not detected_features.has_ast:
+        pytest.skip("Test requires the AST builtins")
+
+
+@pytest.fixture
+def requires_no_ast(detected_features):
+    """Skip if the AST builtins ARE built in (for testing their absence)."""
+    if detected_features.has_ast:
+        pytest.skip("Test requires a server without the AST builtins")
 
 
 @pytest.fixture

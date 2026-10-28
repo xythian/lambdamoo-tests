@@ -9,6 +9,7 @@ Server Configuration Options (from ./configure):
 - xml: XML parsing (--enable-xml)
 - waifs: Waif objects (--enable-waifs)
 - waif_dict: Waif dictionary syntax (--enable-waifs=dict or --enable-def-WAIF_DICT)
+- ast: Parser builtins ast_parse/ast_unparse/ast_info (--enable-ast)
 - jit: Native code generation (--enable-jit, kruton/lambdamoo JIT branches)
 - unitext: Unicode text builtins such as string_width() (--enable-unitext)
 """
@@ -38,6 +39,7 @@ class ServerFeatures:
     has_bitwise: bool = False
     has_jit: bool = False
     has_unitext: bool = False
+    has_ast: bool = False
 
     def __post_init__(self):
         """Derive feature flags from raw options."""
@@ -52,6 +54,7 @@ class ServerFeatures:
         self.has_regexp = 'regexp' in self.features
         self.has_jit = 'jit' in self.features
         self.has_unitext = 'unitext' in self.features
+        self.has_ast = 'ast' in self.features
 
         # WAIF_DICT can be in options (True means enabled when waifs active)
         waif_dict_opt = self.options.get('WAIF_DICT')
@@ -94,6 +97,7 @@ class ServerFeatures:
             'bitwise': self.has_bitwise,
             'jit': self.has_jit,
             'unitext': self.has_unitext,
+            'ast': self.has_ast,
         }
         return all(feature_map.get(f, False) for f in required_features)
 
@@ -224,3 +228,4 @@ REQUIRES_WAIF_DICT = 'waif_dict'
 REQUIRES_REGEXP = 'regexp'
 REQUIRES_BITWISE = 'bitwise'
 REQUIRES_JIT = 'jit'
+REQUIRES_AST = 'ast'

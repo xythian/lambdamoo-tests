@@ -74,6 +74,11 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
         configure_flags=["--enable-sz=i64", "--enable-unicode", "--enable-waifs=dict"],
         description="64-bit integers + Unicode + Waifs",
     ),
+    "i64_ast": BuildConfig(
+        name="i64_ast",
+        configure_flags=["--enable-sz=i64", "--enable-ast"],
+        description="64-bit integers + AST builtins",
+    ),
     "waterpoint": BuildConfig(
         name="waterpoint",
         configure_flags=[
@@ -83,8 +88,9 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
             "--enable-unitext",
+            "--enable-ast",
         ],
-        description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise + unitext)",
+        description="Full Waterpoint config (i64 + unicode + xml + waifs + bitwise + unitext + ast)",
     ),
     "waterpoint_jit": BuildConfig(
         name="waterpoint_jit",
@@ -95,6 +101,7 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
             "--enable-unitext",
+            "--enable-ast",
             "--enable-jit",
         ],
         description="Waterpoint config plus the MIR-based JIT (kruton/lambdamoo JIT branches)",
@@ -108,6 +115,7 @@ PREDEFINED_BUILD_CONFIGS: Dict[str, BuildConfig] = {
             "--enable-waifs=dict",
             "--enable-def-BITWISE_OPERATORS",
             "--enable-unitext",
+            "--enable-ast",
         ],
         description="Full feature set (alias for waterpoint)",
     ),
@@ -491,7 +499,8 @@ tags_from = "https://github.com/wrog/lambdamoo"
 #   i64_xml         - 64-bit integers + XML support
 #   i64_waifs       - 64-bit integers + Waifs with dict syntax
 #   i64_unicode_waifs - 64-bit integers + Unicode + Waifs
-#   waterpoint      - Full Waterpoint config (i64 + unicode + xml + waifs)
+#   i64_ast         - 64-bit integers + AST builtins
+#   waterpoint      - Full Waterpoint config (i64 + unicode + xml + waifs + bitwise + unitext + ast)
 #   waterpoint_jit  - Waterpoint config + --enable-jit (kruton-jit)
 #   full            - Full feature set (alias for waterpoint)
 
