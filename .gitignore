@@ -60,3 +60,6 @@ Thumbs.db
 
 # Kaitai Struct compiler (tools/kaitai)
 node_modules/
+
+# lmt coverage output
+/coverage/

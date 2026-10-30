@@ -59,7 +59,8 @@ class TestIntegerPersistence:
             read_client.close()
             server_pair.read_server.stop(read_instance)
 
-    def test_large_integers_64bit(self, server_pair: ServerPair, write_server_db, tmp_path):
+    def test_large_integers_64bit(self, server_pair: ServerPair, write_server_db, tmp_path,
+                                  requires_i64):
         """64-bit integers survive write→read cycle."""
         db_path = tmp_path / "test.db"
         shutil.copy(write_server_db, db_path)

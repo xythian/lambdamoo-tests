@@ -29,6 +29,7 @@ import os
 import platform
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from typing import Generator, Dict, List, Optional
 
@@ -36,6 +37,8 @@ import pytest
 
 from lib.protocol import ServerConfig, ServerPair
 from lib.moo_server import MooServer, MooClient
+from lib.assertions import assert_moo_success
+from lib.moocode import moo_string
 from harness.config import get_config
 
 
@@ -91,7 +94,7 @@ def pytest_addoption(parser):
         "--candidate-features",
         action="store",
         default=None,
-        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict)"
+        help="Known features for candidate server (comma-separated: i64,unicode,xml,waifs,waif_dict,bitwise,jit,unitext,ast)"
     )
 
 
@@ -536,6 +539,52 @@ def client(server, candidate_server, request) -> Generator[MooClient, None, None
     client.close()
 
 
+@pytest.fixture
+def program(client):
+    """Return a function that runs MOO statements as a verb and returns the eval result.
+
+    The verb lives on a fresh object, so tests can use statements (loops,
+    assignments, try/except) that the expression-only eval command cannot.
+    run(lines, args="", timeout=None) returns (result, elapsed_seconds);
+    run.obj is the object holding the verbs.
+    """
+    obj = assert_moo_success(client.eval('create(#1)'))
+    counter = [0]
+
+    def run(lines, args="", timeout=None):
+        counter[0] += 1
+        name = f"run{counter[0]}"
+        assert_moo_success(client.eval(
+            f'add_verb({obj}, {{player, "rxd", "{name}"}}, {{"this", "none", "this"}})'))
+        code = ", ".join(moo_string(line) for line in lines)
+        errors = assert_moo_success(client.eval(f'set_verb_code({obj}, "{name}", {{{code}}})'))
+        assert errors == '{}', f"verb did not compile: {errors}"
+        start = time.monotonic()
+        result = client.eval(f'{obj}:{name}({args})', timeout=timeout)
+        return result, time.monotonic() - start
+
+    run.obj = obj
+    return run
+
+
+@pytest.fixture
+def wizard_and_programmer(multiplayer_server, candidate_server, request):
+    """Clients on one server for the wizard (#3) and a non-wizard programmer (#4).
+
+    Player2 (#4) has the programmer bit but not the wizard bit, so it is
+    subject to the permission checks that wizards bypass.
+    """
+    trace = request.config.getoption("--moo-trace")
+    clients = []
+    for name in ("Wizard", "Player2"):
+        c = candidate_server.connect(multiplayer_server, trace=trace)
+        c.authenticate(name)
+        clients.append(c)
+    yield tuple(clients)
+    for c in clients:
+        c.close()
+
+
 # ============================================================================
 # Platform Detection
 # ============================================================================
@@ -599,6 +648,10 @@ def detected_features(client, candidate_config) -> ServerFeatures:
         features.has_bitwise = True
     if 'jit' in known:
         features.has_jit = True
+    if 'unitext' in known:
+        features.has_unitext = True
+    if 'ast' in known:
+        features.has_ast = True
 
     return features
 
@@ -629,6 +682,20 @@ def requires_xml(detected_features):
     """Skip if XML support is not enabled."""
     if not detected_features.has_xml:
         pytest.skip("Test requires XML support")
+
+
+@pytest.fixture
+def requires_ast(detected_features):
+    """Skip if the AST builtins (--enable-ast) are not built in."""
+    if not detected_features.has_ast:
+        pytest.skip("Test requires the AST builtins")
+
+
+@pytest.fixture
+def requires_no_ast(detected_features):
+    """Skip if the AST builtins ARE built in (for testing their absence)."""
+    if detected_features.has_ast:
+        pytest.skip("Test requires a server without the AST builtins")
 
 
 @pytest.fixture
@@ -678,6 +745,20 @@ def requires_no_jit(detected_features):
     """Skip if the server WAS built with the JIT (for testing non-JIT behavior)."""
     if detected_features.has_jit:
         pytest.skip("Test requires a server built without the JIT")
+
+
+@pytest.fixture
+def requires_unitext(detected_features):
+    """Skip if the Unicode text extension (--enable-unitext) is not enabled."""
+    if not detected_features.has_unitext:
+        pytest.skip("Test requires the unitext extension")
+
+
+@pytest.fixture
+def requires_no_unitext(detected_features):
+    """Skip if the unitext extension IS enabled (for testing servers without it)."""
+    if detected_features.has_unitext:
+        pytest.skip("Test requires a server without the unitext extension")
 
 
 @pytest.fixture

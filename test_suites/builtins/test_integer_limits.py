@@ -81,6 +81,24 @@ class TestWrappingArithmetic:
         result = assert_moo_success(client.eval('{2 ^ 62, 2 ^ 63, 2 ^ 64}'))
         assert result == f'{{4611686018427387904, {I64_MIN}, 0}}'
 
+    def test_power_overflow_wraps_32bit(self, client, requires_no_i64):
+        """2 ^ 30 is exact and 2 ^ 31 wraps to the minimum."""
+        result = assert_moo_success(client.eval('{2 ^ 30, 2 ^ 31, 2 ^ 32}'))
+        assert result == f'{{1073741824, {I32_MIN}, 0}}'
+
+    def test_power_wraps_through_repeated_squaring(self, client, limits):
+        """A power that overflows partway through squaring wraps to 3 ^ n mod 2 ^ bits."""
+        low, high = limits
+        exponent = 41 if high == I64_MAX else 21
+        span = high - low + 1
+        expected = (3 ** exponent - low) % span + low
+        assert assert_moo_success(client.eval(f'3 ^ {exponent}')) == str(expected)
+
+    def test_minimum_literal(self, client, limits):
+        """The most negative integer can be written as a literal."""
+        low, _ = limits
+        assert assert_moo_success(client.eval(f'{{{low}, {low} + 1}}')) == f'{{{low}, {low + 1}}}'
+
 
 class TestBuiltinArguments:
     """Builtins reject values their C argument types can't hold."""

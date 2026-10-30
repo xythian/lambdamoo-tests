@@ -184,7 +184,7 @@ class TestMathFunctions:
 class TestLargeNumbers:
     """Tests for large number handling (requires 64-bit integers)."""
 
-    def test_arith_040_large_integers(self, client):
+    def test_arith_040_large_integers(self, client, requires_i64):
         """ARITH-040: Large integers are handled correctly."""
         # Test beyond 32-bit range
         result = client.eval('2147483647 + 1')
@@ -193,7 +193,7 @@ class TestLargeNumbers:
         result = client.eval('4294967296 * 2')
         assert_moo_int(result, 8589934592)
 
-    def test_arith_041_very_large_integers(self, client):
+    def test_arith_041_very_large_integers(self, client, requires_i64):
         """ARITH-041: Very large integers work (64-bit)."""
         # Near 64-bit limit
         result = client.eval('9000000000000000000 + 1')

@@ -9,6 +9,7 @@ Usage:
     lmt clean --list
     lmt test --candidate ./moo
     lmt edge /path/to/moo.sock
+    lmt coverage --source ../wp-lambdamoo
 """
 
 import argparse
@@ -387,6 +388,103 @@ Build spec format:
         metavar="N",
         help="Run tests in N parallel workers (default: %(default)s; use 1 to run serially, "
              "e.g. with --moo-trace)"
+    )
+    parser.add_argument(
+        "-k",
+        dest="keyword",
+        help="Only run tests matching the given keyword expression"
+    )
+    parser.add_argument(
+        "-m", "--mark",
+        dest="marker",
+        help="Only run tests matching the given marker"
+    )
+    parser.add_argument(
+        "pytest_args",
+        nargs="*",
+        help="Additional arguments to pass to pytest"
+    )
+
+    return parser
+
+
+def add_coverage_parser(subparsers):
+    """Add the 'coverage' subcommand parser."""
+    parser = subparsers.add_parser(
+        'coverage',
+        help='Measure the C code coverage of the test suite',
+        description='Build the server with gcov instrumentation, run the test suite '
+                    'against it, and report which lines, branches and builtins ran',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # wp-lambdamoo's waterpoint branch, waterpoint config
+  lmt coverage
+
+  # A local checkout, or another branch
+  lmt coverage --source ../wp-lambdamoo
+  lmt coverage --repo wp-lambdamoo --ref my-branch
+
+  # Rerun some tests against the same build (counts start from zero)
+  lmt coverage --reuse-build -k test_math
+
+Reports go in the output directory (default: ./coverage):
+  coverage.txt            Per-file line coverage
+  html/index.html         Annotated source, line by line
+  summary.json            Overall percentages
+  coverage.json           Everything gcovr measured
+  uncalled-builtins.txt   Builtins no test called
+
+The server needs an --enable-coverage configure option, and gcc or clang.
+"""
+    )
+
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument(
+        "--source",
+        type=Path,
+        help="Path to local source tree"
+    )
+    source_group.add_argument(
+        "--repo",
+        help="Repository name or URL (default: wp-lambdamoo)"
+    )
+    parser.add_argument(
+        "--ref",
+        help="Git ref to checkout (branch, tag, commit)"
+    )
+    parser.add_argument(
+        "--config", "-c",
+        dest="build_config",
+        help="Named build configuration (default: the repo's, or waterpoint)"
+    )
+    parser.add_argument(
+        "--configure-flags",
+        default="",
+        help="Flags for ./configure (overrides --config)"
+    )
+    parser.add_argument(
+        "--output", "-o",
+        type=Path,
+        default=Path("coverage"),
+        help="Directory for the build and the reports (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--reuse-build",
+        action="store_true",
+        help="Reuse the coverage build already in the output directory"
+    )
+    parser.add_argument(
+        "--keep-artifacts",
+        action="store_true",
+        help="Keep test artifacts (databases, logs) after test run"
+    )
+    parser.add_argument(
+        "-j", "--jobs",
+        type=int,
+        default=default_test_jobs(),
+        metavar="N",
+        help="Run tests in N parallel workers (default: %(default)s)"
     )
     parser.add_argument(
         "-k",
@@ -942,6 +1040,48 @@ def default_test_jobs() -> int:
     return min(16, 4 * (os.cpu_count() or 1))
 
 
+def build_pytest_command(args, candidate_binary, candidate_name, candidate_features, prior_args) -> list:
+    """Return the pytest command line for a test or coverage run.
+
+    Args:
+        args: Parsed arguments with keep_artifacts, jobs, keyword, marker and
+            pytest_args.
+        candidate_binary: Path to the candidate server, or None.
+        candidate_name: Name for the candidate, or None.
+        candidate_features: Features the candidate is known to have, or None.
+        prior_args: Prior binaries as 'name:path' strings.
+    """
+    pytest_cmd = [sys.executable, "-m", "pytest"]
+
+    if candidate_binary:
+        pytest_cmd.append(f"--candidate={candidate_binary}")
+        if candidate_name:
+            pytest_cmd.append(f"--candidate-name={candidate_name}")
+        if candidate_features:
+            pytest_cmd.append(f"--candidate-features={','.join(candidate_features)}")
+
+    for prior in prior_args:
+        pytest_cmd.append(f"--prior={prior}")
+
+    if args.keep_artifacts:
+        pytest_cmd.append("--keep-artifacts")
+
+    if args.jobs > 1:
+        pytest_cmd.extend(["-n", str(args.jobs)])
+
+    if args.keyword:
+        pytest_cmd.extend(["-k", args.keyword])
+
+    if args.marker:
+        pytest_cmd.extend(["-m", args.marker])
+
+    # Add any additional pytest args
+    if args.pytest_args:
+        pytest_cmd.extend(args.pytest_args)
+
+    return pytest_cmd
+
+
 def cmd_test(args):
     """Execute the test command."""
     import subprocess
@@ -985,39 +1125,90 @@ def cmd_test(args):
             print(f"Error building prior: {e}", file=sys.stderr)
             return 1
 
-    # Build pytest command
-    pytest_cmd = [sys.executable, "-m", "pytest"]
-
-    if candidate_binary:
-        pytest_cmd.append(f"--candidate={candidate_binary}")
-        if candidate_name:
-            pytest_cmd.append(f"--candidate-name={candidate_name}")
-        if candidate_features:
-            pytest_cmd.append(f"--candidate-features={','.join(candidate_features)}")
-
-    for prior in prior_args:
-        pytest_cmd.append(f"--prior={prior}")
-
-    if args.keep_artifacts:
-        pytest_cmd.append("--keep-artifacts")
-
-    if args.jobs > 1:
-        pytest_cmd.extend(["-n", str(args.jobs)])
-
-    if args.keyword:
-        pytest_cmd.extend(["-k", args.keyword])
-
-    if args.marker:
-        pytest_cmd.extend(["-m", args.marker])
-
-    # Add any additional pytest args
-    if args.pytest_args:
-        pytest_cmd.extend(args.pytest_args)
+    pytest_cmd = build_pytest_command(args, candidate_binary, candidate_name, candidate_features, prior_args)
 
     # Run pytest
     print(f"\nRunning: {' '.join(str(x) for x in pytest_cmd)}\n")
     result = subprocess.run(pytest_cmd)
     return result.returncode
+
+
+def cmd_coverage(args):
+    """Execute the coverage command."""
+    import shlex
+    import subprocess
+    from harness.config import get_config, get_build_config
+    from harness.coverage import (
+        build_coverage_server, reset_counters, run_gcovr, summary_line, write_builtin_report,
+    )
+    from harness.repos import get_or_clone_repo
+
+    cfg = get_config()
+    output_dir = args.output.resolve()
+
+    if args.source:
+        source_dir = args.source.resolve()
+        repo_config = None
+    else:
+        repo = args.repo or "wp-lambdamoo"
+        repo_config = cfg.repos.get(repo)
+        source_dir = get_or_clone_repo(
+            repo,
+            cfg.repo_cache_dir,
+            ref=args.ref or (repo_config.default_branch if repo_config else None) or None,
+            update=True,
+            tags_from=repo_config.tags_from if repo_config else "",
+        )
+
+    if args.configure_flags:
+        flags = shlex.split(args.configure_flags)
+    else:
+        config_name = args.build_config or (repo_config and repo_config.default_build_config) or "waterpoint"
+        bc = get_build_config(config_name, cfg)
+        if bc is None:
+            available = ", ".join(cfg.build_configs.keys())
+            print(f"Error: Unknown build config: {config_name}. Available: {available}", file=sys.stderr)
+            return 1
+        flags = list(bc.configure_flags)
+        print(f"Using build config '{config_name}': {' '.join(flags) or '(default)'}")
+
+    try:
+        binary = build_coverage_server(
+            source_dir, output_dir, flags, make_jobs=cfg.make_jobs, reuse=args.reuse_build,
+        )
+    except Exception as e:
+        print(f"Error building coverage server: {e}", file=sys.stderr)
+        return 1
+
+    build_dir = output_dir / "build"
+    reset_counters(build_dir)
+
+    env = dict(os.environ)
+    if "MOO_MINIMAL_DB" not in env and (build_dir / "Minimal.db").exists():
+        env["MOO_MINIMAL_DB"] = str(build_dir / "Minimal.db")
+
+    pytest_cmd = build_pytest_command(
+        args, binary, "coverage", features_from_configure_flags(flags), [],
+    )
+    print(f"\nRunning: {' '.join(str(x) for x in pytest_cmd)}\n")
+    test_result = subprocess.run(pytest_cmd, env=env)
+
+    print("\nWriting coverage reports...")
+    try:
+        reports = run_gcovr(build_dir, output_dir)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    builtins_summary = write_builtin_report(reports["json"], output_dir / "uncalled-builtins.txt")
+
+    print(f"\nCoverage: {summary_line(reports['summary'])}")
+    if builtins_summary:
+        print(f"Builtins: {builtins_summary} (see {output_dir / 'uncalled-builtins.txt'})")
+    print(f"Report:   {reports['html']}")
+    if test_result.returncode != 0:
+        print(f"\nSome tests failed (pytest exit status {test_result.returncode})")
+    return test_result.returncode
 
 
 def main():
@@ -1032,6 +1223,7 @@ Commands:
   setup    Set up test databases
   clean    Clean cached repositories and builds
   test     Run the test suite
+  coverage Measure the C code coverage of the test suite
 
 Examples:
   # Build a server with waterpoint config
@@ -1079,6 +1271,7 @@ Environment Variables:
     add_test_parser(subparsers)
     add_roundtrip_parser(subparsers)
     add_edge_parser(subparsers)
+    add_coverage_parser(subparsers)
 
     # Parse arguments
     args = parser.parse_args()
@@ -1104,6 +1297,7 @@ Environment Variables:
         'test': cmd_test,
         'roundtrip': cmd_roundtrip,
         'edge': cmd_edge,
+        'coverage': cmd_coverage,
     }
 
     handler = handlers.get(args.command)

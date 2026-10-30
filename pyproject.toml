@@ -30,6 +30,7 @@ dependencies = [
     "pexpect>=4.8",
     "packaging>=21.0",
     "kaitaistruct>=0.11",
+    "gcovr>=7.0",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
