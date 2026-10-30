@@ -63,7 +63,8 @@ def cpu_seconds(pid: int) -> float:
 class TestNetworkFaultRecovery:
     """The network loop recovers from descriptor faults instead of spinning."""
 
-    def test_closed_listener_and_connection_are_dropped(self, candidate_server, faulty_server):
+    def test_closed_listener_and_connection_are_dropped(self, candidate_server, faulty_server,
+                                                          requires_tcp_listeners):
         """A listener and a connection closed underneath the server are dropped.
 
         The rest of the server keeps working: existing connections still get

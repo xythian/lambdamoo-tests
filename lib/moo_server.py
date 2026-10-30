@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
+from .features import is_session_build
+from .session import SessionEdge
 from .protocol import (
     ServerProtocol,
     ClientProtocol,
@@ -28,7 +30,8 @@ class MooServerInstance(ServerInstance):
 
     def __init__(self, config: ServerConfig, port: int, input_db: Path,
                  output_db: Path, work_dir: Path, process: subprocess.Popen,
-                 log_file: Path):
+                 log_file: Path, socket_path: Optional[Path] = None,
+                 edge: Optional[SessionEdge] = None):
         super().__init__(
             config=config,
             port=port,
@@ -39,6 +42,10 @@ class MooServerInstance(ServerInstance):
         )
         self.process = process
         self.log_file = log_file
+        # Session builds only: the server's socket, and the edge the suite
+        # started to give the server a TCP port
+        self.socket_path = socket_path
+        self.edge = edge
 
     def is_running(self) -> bool:
         """Check if the server process is still running."""
@@ -327,6 +334,17 @@ class MooServer(ServerProtocol):
             time.sleep(0.01)
         return None
 
+    def _wait_for_listen_socket(self, log_file: Path, socket_path: Path,
+                                timeout: float = 10.0) -> bool:
+        """Wait for a session build to log that it is listening on its socket."""
+        start = time.time()
+        marker = f"now listening on {socket_path}"
+        while time.time() - start < timeout:
+            if log_file.exists() and marker in log_file.read_text():
+                return True
+            time.sleep(0.05)
+        return False
+
     def _wait_for_ready(self, port: int, timeout: float = 10.0) -> bool:
         """Wait for the server to be ready to accept connections."""
         start = time.time()
@@ -347,7 +365,8 @@ class MooServer(ServerProtocol):
               work_dir: Optional[Path] = None,
               emergency_mode: bool = False,
               extra_args: Optional[List[str]] = None,
-              env: Optional[Dict[str, str]] = None) -> MooServerInstance:
+              env: Optional[Dict[str, str]] = None,
+              session_socket: Optional[Path] = None) -> MooServerInstance:
         """Start a LambdaMOO server instance.
 
         If port is not specified, uses ephemeral port assignment (port 0)
@@ -359,6 +378,12 @@ class MooServer(ServerProtocol):
 
         extra_args are inserted after the database files and before the port
         (e.g. ['-N', '+O']); env entries are added to the server's environment.
+
+        A server built with the session network backend listens on a Unix
+        socket instead of a port. Given session_socket, it listens there and
+        the caller attaches its own edge; the instance's port is 0. Otherwise
+        it listens in the instance directory and a SessionEdge gives it a TCP
+        port, so tests written for TCP servers run unchanged.
         """
         database = Path(database).resolve()
         if not database.exists():
@@ -385,7 +410,12 @@ class MooServer(ServerProtocol):
         cmd.extend(['-l', str(log_file), str(input_db), str(output_db)])
         cmd.extend(extra_args or [])
 
-        if not emergency_mode:
+        session = not emergency_mode and is_session_build(self.config.binary)
+        socket_path = None
+        if session:
+            socket_path = Path(session_socket) if session_socket else instance_dir / "session.sock"
+            cmd.append(str(socket_path))
+        elif not emergency_mode:
             # Use ephemeral port (0) by default - OS assigns atomically
             requested_port = port if port is not None else 0
             cmd.extend(['-p', str(requested_port)])
@@ -403,6 +433,23 @@ class MooServer(ServerProtocol):
                 env=process_env,
             )
             actual_port = 0  # No network listener in emergency mode
+        elif session:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(instance_dir),
+                env=process_env,
+            )
+            if not self._wait_for_listen_socket(log_file, socket_path):
+                process.kill()
+                process.wait()
+                log_contents = log_file.read_text() if log_file.exists() else "(no log)"
+                raise RuntimeError(
+                    f"Server failed to start - not listening on {socket_path}.\n"
+                    f"Log contents:\n{log_contents}"
+                )
+            actual_port = 0
         else:
             process = subprocess.Popen(
                 cmd,
@@ -435,11 +482,17 @@ class MooServer(ServerProtocol):
             work_dir=instance_dir,
             process=process,
             log_file=log_file,
+            socket_path=socket_path,
         )
+        if session and session_socket is None:
+            instance.edge = SessionEdge(str(socket_path)).start()
+            instance.port = instance.edge.port
 
-        # Verify we can actually connect (skip for emergency mode)
-        if not emergency_mode:
-            if not self._wait_for_ready(actual_port):
+        # Verify we can actually connect (skip for emergency mode).  A session
+        # server is ready once it logs its socket, and a probe through the edge
+        # would become a real connection that a database may log in.
+        if instance.port and not session:
+            if not self._wait_for_ready(instance.port):
                 self.stop(instance)
                 log_contents = instance.get_log_contents()
                 raise RuntimeError(
@@ -459,6 +512,9 @@ class MooServer(ServerProtocol):
         """
         if instance in self._instances:
             self._instances.remove(instance)
+        if instance.edge is not None:
+            instance.edge.close()
+            instance.edge = None
 
         # Check if process already exited (but still need to reap it)
         exit_code = instance.process.poll()

@@ -58,5 +58,8 @@ Thumbs.db
 # uv
 .python-version
 
+# Kaitai Struct compiler (tools/kaitai)
+node_modules/
+
 # lmt coverage output
 /coverage/
