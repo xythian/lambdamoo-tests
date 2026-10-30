@@ -1,4 +1,4 @@
-"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-021).
+"""Session backend: listen() ports and outbound connections through the edge (SNT-001 through SNT-024).
 
 A session server listens only on its Unix socket. Ports opened with listen()
 and connections made with open_network_connection() are the edge's: the
@@ -21,6 +21,7 @@ from typing import NamedTuple
 import pytest
 
 from lib.moo_server import MooClient
+from lib.moocode import define_verb, moo_string
 from lib.session import MODE_GRACEFUL, MODE_INITIAL, SessionEdge
 
 
@@ -309,6 +310,87 @@ class TestOutbound:
             net_world.wizard.eval_expect_success('notify(#5, "after restart")')
             assert remote.wait_for(b'after restart\r\n')
             assert not remote.closed.is_set()
+        finally:
+            remote.close()
+
+
+class TestPendingOutbound:
+    """A task waiting for the edge to connect is part of the edge's request,
+    not a suspended task: it isn't saved with the database and resume()
+    can't wake it, but kill_task() can kill it."""
+
+    @staticmethod
+    def stall_connects(world) -> threading.Event:
+        """Make the edge hold every CONNECT until the returned event is set."""
+        release = threading.Event()
+        connect = world.edge._connect_outbound
+
+        def stalled(request):
+            release.wait(30)
+            connect(request)
+        world.edge._connect_outbound = stalled
+        return release
+
+    @staticmethod
+    def task_status(client: MooClient, task: str) -> str:
+        code = f'for t in (queued_tasks()) if (t[1] == {task}) return t[2]; endif endfor return 0;'
+        return client.eval_expect_success(f'eval({moo_string(code)})')
+
+    def start_connecting(self, world, port: int) -> str:
+        code = f'fork t (0) open_network_connection("127.0.0.1", {port}); endfork return t;'
+        task = world.wizard.eval_expect_success(f'eval({moo_string(code)})')[4:-1]
+        assert wait_until(lambda: self.task_status(world.wizard, task) == '{1, "connecting"}')
+        return task
+
+    def test_snt_022_pending_connect_is_not_saved(self, net_world):
+        """SNT-022: resume() can't wake a task waiting for the edge, and a
+        server replacement doesn't carry it over."""
+        release = self.stall_connects(net_world)
+        remote = Remote()
+        try:
+            task = self.start_connecting(net_world, remote.port)
+            assert error_of(net_world.wizard, f'resume({task})') == 'E_INVARG'
+            net_world.graceful_restart()
+            assert wait_until(lambda: "SESSION REATTACHED: #3" in
+                              net_world.instance.get_log_contents(), 10)
+            assert self.task_status(net_world.wizard, task) == '{1, 0}'
+        finally:
+            release.set()
+            remote.close()
+
+    def test_snt_023_pending_connect_can_be_killed(self, net_world):
+        """SNT-023: kill_task() kills a task waiting for the edge, and the
+        connection the edge then makes is refused and closed."""
+        release = self.stall_connects(net_world)
+        remote = Remote()
+        try:
+            task = self.start_connecting(net_world, remote.port)
+            net_world.wizard.eval_expect_success(f'kill_task({task})')
+            assert self.task_status(net_world.wizard, task) == '{1, 0}'
+            release.set()
+            assert remote.closed.wait(10)
+            assert net_world.instance.is_running()
+        finally:
+            release.set()
+            remote.close()
+
+    def test_snt_024_outbound_with_unlistening_listener_survives_restart(self, net_world):
+        """SNT-024: an outbound connection whose listener object isn't
+        listening, logged in as a player, resumes after a graceful restart."""
+        remote = Remote()
+        try:
+            handler = net_world.wizard.eval_expect_success('create(#-1)')
+            define_verb(net_world.wizard, handler, 'do_login_command', ['return #5;'])
+            net_world.wizard.eval_expect_success(
+                f'open_network_connection("127.0.0.1", {remote.port}, {handler})')
+            assert wait_until(lambda: remote.connections)
+            remote.connections[0].sendall(b'hello\r\n')
+            assert wait_until(lambda: '#5' in net_world.wizard.eval_expect_success('connected_players()'))
+
+            new = net_world.graceful_restart()
+            assert wait_until(lambda: "SESSION REATTACHED: #5" in new.get_log_contents(), 10)
+            net_world.wizard.eval_expect_success('notify(#5, "after restart")')
+            assert remote.wait_for(b'after restart\r\n')
         finally:
             remote.close()
 

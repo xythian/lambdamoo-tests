@@ -91,7 +91,8 @@ BIND_PAYLOAD = struct.Struct('>qq')
 POSITION = struct.Struct('>Q')
 CONNECT_FIXED = struct.Struct('>IHHIH2x')
 CONNECT_FAILED_FIXED = struct.Struct('>IB3x')
-LISTEN_FAILED_FIXED = struct.Struct('>HB5x')
+LISTEN_FAILED_FIXED = struct.Struct('>HBxI')
+LISTENERS_FIXED = struct.Struct('>I')
 LISTEN_FIXED = struct.Struct('>HHHHH')
 
 _LENGTHS = {
@@ -104,7 +105,7 @@ _LENGTHS = {
     CLOSE: (0, MAX_CONTROL),
     ERROR: (0, MAX_CONTROL),
     BIND: (BIND_PAYLOAD.size, BIND_PAYLOAD.size),
-    LISTENERS: (0, MAX_CONTROL),
+    LISTENERS: (LISTENERS_FIXED.size, MAX_CONTROL),
     CONNECT: (CONNECT_FIXED.size + 1, MAX_CONTROL),
     CONNECT_FAILED: (CONNECT_FAILED_FIXED.size, MAX_CONTROL),
     LISTEN_FAILED: (LISTEN_FAILED_FIXED.size, MAX_CONTROL),
@@ -301,15 +302,19 @@ class Listen:
     acme: Tuple[str, ...] = ()
 
 
-def decode_listeners(payload: bytes) -> List[Listen]:
-    """Return the ports a LISTENERS frame names.
+def decode_listeners(payload: bytes) -> Tuple[int, List[Listen]]:
+    """Return a LISTENERS frame's serial and the ports it names.
 
     Raises:
-        ProtocolError: an entry is truncated, repeats a port, sets an unknown
-            flag, or gives paths or ACME names its flags don't allow.
+        ProtocolError: the serial is 0, or an entry is truncated, repeats a
+            port, sets an unknown flag, or gives paths or ACME names its flags
+            don't allow.
     """
     listens: List[Listen] = []
-    offset = 0
+    serial, = LISTENERS_FIXED.unpack_from(payload)
+    if not serial:
+        raise ProtocolError("LISTENERS serial is 0")
+    offset = LISTENERS_FIXED.size
     while offset < len(payload):
         if offset + LISTEN_FIXED.size > len(payload):
             raise ProtocolError("truncated LISTENERS entry")
@@ -333,7 +338,7 @@ def decode_listeners(payload: bytes) -> List[Listen]:
         offset = end
     if len(listens) > MAX_LISTENERS:
         raise ProtocolError("too many LISTENERS entries")
-    return listens
+    return serial, listens
 
 
 @dataclass
@@ -359,9 +364,10 @@ def encode_connect_failed(request: int, code: int, reason: str) -> bytes:
     return encode_frame(CONNECT_FAILED, CONNECT_FAILED_FIXED.pack(request, code) + reason.encode()[:4096])
 
 
-def encode_listen_failed(port: int, code: int, reason: str) -> bytes:
-    """Return a LISTEN_FAILED frame."""
-    return encode_frame(LISTEN_FAILED, LISTEN_FAILED_FIXED.pack(port, code) + reason.encode()[:4096])
+def encode_listen_failed(port: int, code: int, reason: str, serial: int = 1) -> bytes:
+    """Return a LISTEN_FAILED frame answering the LISTENERS with that serial."""
+    return encode_frame(LISTEN_FAILED,
+                        LISTEN_FAILED_FIXED.pack(port, code, serial) + reason.encode()[:4096])
 
 
 def peer_pid(sock: socket.socket) -> Optional[int]:
@@ -398,6 +404,7 @@ class Carrier:
             raise
         self.reader = FrameReader()
         self._pending: List[Frame] = []
+        self.outgoing = bytearray()
         self.pid = peer_pid(self.sock)
 
     def send(self, data: bytes) -> None:
@@ -405,6 +412,36 @@ class Carrier:
         if self.check_sent:
             check_frame(data)
         self.sock.sendall(data)
+
+    def queue(self, data: bytes) -> None:
+        """Queue encoded frames for flush(), on a carrier made non-blocking."""
+        if self.check_sent:
+            check_frame(data)
+        self.outgoing += data
+
+    def flush(self) -> None:
+        """Write as much queued output as the socket takes without waiting.
+
+        Raises:
+            OSError: if the server has gone.
+        """
+        while self.outgoing:
+            try:
+                sent = self.sock.send(self.outgoing)
+            except (BlockingIOError, InterruptedError):
+                return
+            del self.outgoing[:sent]
+
+    def drain(self, timeout: float) -> None:
+        """Write queued output, waiting at most timeout seconds; errors are ignored."""
+        deadline = time.monotonic() + timeout
+        try:
+            self.flush()
+            while self.outgoing and time.monotonic() < deadline:
+                select.select([], [self.sock], [], max(0.0, deadline - time.monotonic()))
+                self.flush()
+        except (OSError, ValueError):
+            pass
 
     def read_frame(self, timeout: Optional[float] = None) -> Optional[Frame]:
         """Return the next frame, or None if the server closed the carrier.
@@ -497,6 +534,37 @@ class Session:
     listen_port: int = 0
     request: int = 0
     database: bytes = NO_DATABASE
+    input_acked: int = 0
+    unacked: bytearray = field(default_factory=bytearray)
+
+    def sent(self, data: bytes) -> int:
+        """Record input written to the server; return the position it starts at.
+
+        The edge keeps it until the server acknowledges it, so that a server
+        that detaches the session without having read it can have it again.
+        """
+        position = self.input_position
+        self.input_position += len(data)
+        self.unacked += data
+        return position
+
+    def acknowledged(self, position: int) -> bool:
+        """Free input the server has read; False if position is impossible."""
+        if not self.input_acked <= position <= self.input_position:
+            return False
+        del self.unacked[:position - self.input_acked]
+        self.input_acked = position
+        return True
+
+    def rewind(self, position: int) -> None:
+        """Go back to input position, which a DETACH named, to resend from it."""
+        del self.unacked[:position - self.input_acked]
+        self.input_acked = self.input_position = position
+
+    def forget_unacknowledged(self) -> None:
+        """Drop input the server may have read, which is never resent after a crash."""
+        self.unacked.clear()
+        self.input_acked = self.input_position
 
     def hello(self, edge_id: bytes) -> Hello:
         return Hello(self.session_id, edge_id, self.generation, self.mode, self.input_position,
@@ -530,10 +598,16 @@ class SessionEdge:
 
     Each accepted client gets a session and its own thread. While a session is
     attached, client bytes go to the server as INPUT and OUTPUT goes to the
-    client. When the attachment is lost, the edge stops reading the client and
-    retries the socket until a server accepts the session, the server refuses
-    it, or ``hold`` seconds pass; in the last two cases it closes the client.
-    Input already sent to a server is never sent again.
+    client. The edge writes to the carrier without blocking, and reads no more
+    from the client while a read is still waiting to be written. When the
+    attachment is lost, the edge stops reading the client and retries the
+    socket until a server accepts the session, the server refuses it, or
+    ``hold`` seconds pass; in the last two cases it closes the client.
+
+    The edge keeps input the server hasn't acknowledged. After a DETACH it
+    sends the next server that input again from the position the DETACH
+    names; after a crash it drops it, so input already sent to a server is
+    never sent twice.
 
     A control attachment, reopened whenever it ends, carries the server's
     LISTENERS and CONNECT requests. Ports the server listens on stay open
@@ -715,7 +789,7 @@ class SessionEdge:
     def _control_frames(self, carrier: Carrier, frames: List[Frame]) -> None:
         for frame in frames:
             if frame.type == LISTENERS:
-                self._set_ports(decode_listeners(frame.payload))
+                self._set_ports(*decode_listeners(frame.payload))
             elif frame.type == CONNECT:
                 request = Connect.decode(frame.payload)
                 thread = threading.Thread(target=self._connect_outbound, args=(request,),
@@ -746,8 +820,8 @@ class SessionEdge:
         context.load_cert_chain(certificate, key)
         return context
 
-    def _set_ports(self, listens: List[Listen]) -> None:
-        """Listen on exactly the given ports, besides the edge's own.
+    def _set_ports(self, serial: int, listens: List[Listen]) -> None:
+        """Listen on exactly the ports LISTENERS SERIAL names, besides the edge's own.
 
         A port whose settings changed is opened again with the new ones.
         """
@@ -762,23 +836,23 @@ class SessionEdge:
             try:
                 context = self._server_context(listen)
             except (OSError, ValueError, ssl.SSLError) as error:
-                self._listen_failed(listen.port, LISTEN_FAILED_CERTIFICATE, error)
+                self._listen_failed(listen.port, LISTEN_FAILED_CERTIFICATE, error, serial)
                 continue
             try:
                 listener = self._bind(listen.port)
             except OSError as error:
-                self._listen_failed(listen.port, LISTEN_FAILED_PORT, error)
+                self._listen_failed(listen.port, LISTEN_FAILED_PORT, error, serial)
                 continue
             with self._lock:
                 self._ports[listen.port] = PortListener(listen, listener, context)
 
-    def _listen_failed(self, port: int, code: int, error: Exception) -> None:
+    def _listen_failed(self, port: int, code: int, error: Exception, serial: int) -> None:
         """Log that the edge can't serve PORT and tell the server."""
         log.warning("cannot listen on port %d: %s", port, error)
         with self._control_lock:
             if self._control is not None:
                 try:
-                    self._control.send(encode_listen_failed(port, code, str(error)))
+                    self._control.send(encode_listen_failed(port, code, str(error), serial))
                 except OSError:
                     pass
 
@@ -849,6 +923,14 @@ class SessionEdge:
         session.request = 0
         return carrier
 
+    @staticmethod
+    def _resend(carrier: Carrier, session: Session) -> None:
+        """Send a new attachment the input a DETACH said its server hadn't read."""
+        data, session.unacked = bytes(session.unacked), bytearray()
+        for start in range(0, len(data), MAX_DATA):
+            chunk = data[start:start + MAX_DATA]
+            carrier.queue(encode_input(session.sent(chunk), chunk))
+
     def _serve(self, client: socket.socket, session: Session) -> None:
         carrier = None
         previous_pid = None
@@ -859,18 +941,34 @@ class SessionEdge:
                     carrier = self._attach(session, previous_pid)
                     if carrier is None:
                         return
+                    carrier.sock.setblocking(False)
+                    self._resend(carrier, session)
                     # Frames that arrived with WELCOME
                     outcome = self._handle(client, carrier, session, carrier.take_pending())
                     readable = []
                 else:
-                    readable, _, _ = select.select([client, carrier.sock], [], [], 0.1)
-                    if isinstance(client, ssl.SSLSocket) and client.pending() and client not in readable:
+                    # One read of client input at a time waits for the carrier.
+                    want_client = not carrier.outgoing
+                    readable, _, _ = select.select(
+                        [carrier.sock] + ([client] if want_client else []),
+                        [carrier.sock] if carrier.outgoing else [], [], 0.1)
+                    if want_client and isinstance(client, ssl.SSLSocket) and client.pending() \
+                            and client not in readable:
                         readable.append(client)
                     if carrier.sock in readable:
                         outcome = self._from_server(client, carrier, session)
+                if outcome == 'ok':
+                    try:
+                        carrier.flush()
+                    except OSError:
+                        session.mode = MODE_CRASH
+                        outcome = 'detached'
                 if outcome == 'closed':
+                    carrier.drain(1.0)
                     return
                 if outcome == 'detached':
+                    if session.database == NO_DATABASE:
+                        session.forget_unacknowledged()
                     previous_pid = carrier.pid
                     carrier.close()
                     carrier = None
@@ -883,20 +981,10 @@ class SessionEdge:
                     except (ConnectionResetError, ssl.SSLError):
                         data = b''
                     if not data:
-                        try:
-                            carrier.send(encode_frame(CLOSE))
-                        except OSError:
-                            pass
+                        carrier.queue(encode_frame(CLOSE))
+                        carrier.drain(1.0)
                         return
-                    position = session.input_position
-                    session.input_position += len(data)
-                    try:
-                        carrier.send(encode_input(position, data))
-                    except OSError:
-                        session.mode = MODE_CRASH
-                        previous_pid = carrier.pid
-                        carrier.close()
-                        carrier = None
+                    carrier.queue(encode_input(session.sent(data), data))
         finally:
             if carrier is not None:
                 carrier.close()
@@ -909,6 +997,8 @@ class SessionEdge:
         """Handle what the server sent; return 'ok', 'detached' or 'closed'."""
         try:
             data = carrier.sock.recv(65536)
+        except (BlockingIOError, InterruptedError):
+            return 'ok'
         except ConnectionResetError:
             data = b''
         if not data:
@@ -933,36 +1023,32 @@ class SessionEdge:
                 try:
                     write_all(client, payload)
                 except OSError:
-                    try:
-                        carrier.send(encode_frame(CLOSE))
-                    except OSError:
-                        pass
+                    carrier.queue(encode_frame(CLOSE))
                     return 'closed'
                 session.output_position += len(payload)
-                try:
-                    carrier.send(encode_ack(DIR_OUTPUT, session.output_position))
-                except OSError:
-                    # The server may already have gone; frames it sent before
-                    # going, such as CLOSE, still need handling.
-                    pass
+                carrier.queue(encode_ack(DIR_OUTPUT, session.output_position))
             elif frame.type == BIND:
                 session.player, session.listener = decode_bind(frame.payload)
             elif frame.type == DETACH:
                 mode, input_position, output_position, database = \
                     decode_detach(frame.payload)
-                if output_position != session.output_position or \
-                        input_position > session.input_position or \
-                        mode == MODE_GRACEFUL and input_position != session.input_position:
-                    database = NO_DATABASE
-                session.mode = mode
-                session.database = database
+                # The server may not have read all the input sent; the next
+                # server gets the rest from the position the DETACH names.
+                if output_position == session.output_position and \
+                        session.input_acked <= input_position <= session.input_position:
+                    session.rewind(input_position)
+                    session.mode = mode
+                    session.database = database
+                else:
+                    session.mode = MODE_CRASH
+                    session.database = NO_DATABASE
                 return 'detached'
             elif frame.type == CLOSE:
                 session.closed_by_server = True
                 return 'closed'
             elif frame.type == ACK:
                 direction, position = decode_ack(frame.payload)
-                if direction != DIR_INPUT or position > session.input_position:
+                if direction != DIR_INPUT or not session.acknowledged(position):
                     session.mode = MODE_CRASH
                     return 'detached'
             else:

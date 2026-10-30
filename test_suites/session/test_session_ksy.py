@@ -11,10 +11,10 @@ import struct
 import pytest
 
 from lib.session import (
-    ACK, BIND, CLOSE, CONNECT, DETACH, DIR_OUTPUT, HELLO, LISTEN_FAILED_CERTIFICATE, LISTENERS,
-    MODE_CRASH, MODE_INITIAL, OUTPUT, WELCOME, FAILED_DESTINATION, Hello, ProtocolError,
-    check_frame, describe_connection, encode_ack, encode_connect_failed, encode_fields,
-    encode_frame, encode_input, encode_listen_failed,
+    ACK, BIND, CLOSE, CONNECT, DETACH, DIR_OUTPUT, FAILED_DESTINATION, HELLO, LISTEN_FAILED,
+    LISTEN_FAILED_CERTIFICATE, LISTENERS, MODE_CRASH, MODE_INITIAL, OUTPUT, WELCOME, Hello,
+    ProtocolError, check_frame, describe_connection, encode_ack, encode_connect_failed,
+    encode_fields, encode_frame, encode_input, encode_listen_failed,
 )
 from lib.session_protocol import SessionProtocol
 
@@ -39,7 +39,7 @@ VALID = {
     'detach': encode_frame(DETACH, struct.pack('>B7xQQ16s', MODE_CRASH, 1, 2, b'd' * 16)),
     'close': encode_frame(CLOSE),
     'bind': encode_frame(BIND, struct.pack('>qq', 3, 0)),
-    'listeners': encode_frame(LISTENERS, listen_entry(7777, 0)
+    'listeners': encode_frame(LISTENERS, struct.pack('>I', 1) + listen_entry(7777, 0)
                               + listen_entry(7443, 3, acme=b'moo.example.org')),
     'connect': encode_frame(CONNECT, struct.pack('>IHHIH2x', 9, 443, 1, 0, 11) + b'example.org'),
     'connect-failed': encode_connect_failed(9, FAILED_DESTINATION, 'refused'),
@@ -85,8 +85,13 @@ class TestDescription:
         pytest.param(encode_frame(DETACH, struct.pack('>B7xQQ16s', MODE_INITIAL, 0, 0, bytes(16))),
                      id='initial-detach'),
         pytest.param(encode_frame(BIND, struct.pack('>qq', 3, 0) + b'x'), id='trailing-bytes'),
-        pytest.param(encode_frame(LISTENERS, listen_entry(0, 0)), id='port-zero'),
-        pytest.param(encode_frame(LISTENERS, listen_entry(7777, 4)), id='unknown-listen-flag'),
+        pytest.param(encode_frame(LISTENERS, struct.pack('>I', 1) + listen_entry(0, 0)),
+                     id='port-zero'),
+        pytest.param(encode_frame(LISTENERS, struct.pack('>I', 1) + listen_entry(7777, 4)),
+                     id='unknown-listen-flag'),
+        pytest.param(encode_frame(LISTENERS, struct.pack('>I', 0)), id='listeners-serial-zero'),
+        pytest.param(encode_frame(LISTEN_FAILED, struct.pack('>HBxI', 7443, 1, 0)),
+                     id='listen-failed-serial-zero'),
         pytest.param(encode_frame(CONNECT, struct.pack('>IHHIH2x', 0, 443, 0, 0, 1) + b'h'),
                      id='request-zero'),
     ])

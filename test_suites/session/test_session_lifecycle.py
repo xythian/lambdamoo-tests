@@ -1,4 +1,4 @@
-"""Session backend: sessions surviving server replacement (SES-001 through SES-014).
+"""Session backend: sessions surviving server replacement (SES-001 through SES-020).
 
 These run only against servers built with --enable-net=session. Clients
 connect over TCP to the reference edge in lib/session.py, which carries each
@@ -14,12 +14,14 @@ sessions about who is connected, so their clients are closed instead.
 import re
 import signal
 import socket
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from lib.moo_server import MooClient
+from lib.moocode import define_verb, moo_string
 from lib.session import MODE_CRASH, MODE_GRACEFUL, MODE_INITIAL, NO_PLAYER, SessionEdge
 
 RECOVERED = "*** Session recovered from a server crash ***"
@@ -330,3 +332,130 @@ class TestServerReplacement:
         time.sleep(2.0)
         assert client.eval_expect_success('#0.gone') == '{}'
         assert "SESSION NOT RESUMED" not in new.get_log_contents()
+
+
+def run(client: MooClient, code: str) -> str:
+    """Run MOO statements with eval(), returning eval()'s result list."""
+    result = client.eval_expect_success(f'eval({moo_string(code)})')
+    assert result.startswith('{1'), f"{code!r} failed: {result}"
+    return result
+
+
+class TestResumedState:
+    """A resumed connection goes on exactly where the old server left it."""
+
+    def test_ses_015_held_and_unread_input_survives_graceful_restart(self, world):
+        """SES-015: input the database held with hold-input, and input beyond
+        MAX_QUEUED_INPUT that the server never read from the edge, all runs on
+        the new server after a graceful restart, once input is released."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        client.eval_expect_success('add_property(#0, "ses_015", 0, {player, "rw"})')
+        client.eval_expect_success('add_property(#0, "ses_015_held", -1, {player, "rw"})')
+        define_verb(client, 'player', 'bump', ['#0.ses_015 = #0.ses_015 + 1;'],
+                    args=('any', 'any', 'any'))
+        # Released by a forked task, which outlives the restart.
+        run(client, 'set_connection_option(player, "hold-input", 1); '
+            'fork (6) #0.ses_015_held = connection_option(player, "hold-input"); '
+            'set_connection_option(player, "hold-input", 0); endfork')
+
+        count = 4000
+        line = 'bump ' + 'x' * 120 + '\r\n'
+        sender = threading.Thread(target=client._socket.sendall,
+                                  args=((line * count).encode(),), daemon=True)
+        sender.start()
+        time.sleep(1.0)
+        session = world.session_for(client)
+        assert session.input_acked < session.input_position, \
+            "the server read everything; the test needs input it hasn't read"
+
+        new = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=new)
+        sender.join(timeout=20)
+        client.send(';{"ses_015", #0.ses_015_held, #0.ses_015}')
+        read_until(client, f'{{"ses_015", 1, {count}}}', timeout=30)
+        assert session.attachments == [MODE_INITIAL, MODE_GRACEFUL]
+
+    def test_ses_016_pending_read_survives_graceful_restart(self, world):
+        """SES-016: a task waiting in read() when the server is replaced gets
+        the next line after the resume, rather than it being run as a command."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        client.eval_expect_success('add_property(#0, "ses_016", 0, {player, "rw"})')
+        run(client, 'fork (0) #0.ses_016 = read(player); endfork')
+        time.sleep(0.5)
+
+        new = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=new)
+        client.send('this line is for read()')
+        time.sleep(0.5)
+        assert client.eval_expect_success('#0.ses_016') == '"this line is for read()"'
+
+    def test_ses_017_connection_options_survive_graceful_restart(self, world):
+        """SES-017: connection options and the output delimiters set with
+        PREFIX and SUFFIX are the same after a graceful restart."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        client.eval_expect_success('set_connection_option(player, "flush-command", "FLUSHME")')
+        client.eval_expect_success('set_connection_option(player, "disable-oob", 1)')
+        client.eval_expect_success('set_connection_option(player, "intrinsic-commands", {"PREFIX", "SUFFIX"})')
+        options = client.eval_expect_success('connection_options(player)')
+        client.send('PREFIX -start-')
+        client.send('SUFFIX -end-')
+
+        new = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=new)
+        client.send(';connection_options(player)')
+        received = read_until(client, '-end-')
+        assert f'-start-\r\n=> {options}\r\n-end-' in received.replace('#-1:  ', '')
+
+    def test_ses_018_partial_line_survives_graceful_restart(self, world):
+        """SES-018: a line the client began before the restart and finished
+        after it arrives whole."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        client.eval_expect_success('add_property(#0, "ses_018", 0, {player, "rw"})')
+        client._socket.sendall(b';#0.ses_018 = "begun ')
+        time.sleep(0.5)
+
+        new = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=new)
+        client.send('and finished"')
+        time.sleep(0.5)
+        assert client.eval_expect_success('#0.ses_018') == '"begun and finished"'
+
+    def test_ses_019_login_during_resume_window(self, world):
+        """SES-019: a player the database recorded as connected who logs in
+        afresh before the resume timeout gets user_disconnected for the old
+        session at once, and never again while connected."""
+        client = world.connect()
+        player = client.eval_expect_success('player')
+        TestServerReplacement().record_disconnects(client)
+        client.eval_expect_success('#0.server_options.session_resume_timeout = 3')
+
+        new = world.crash_restart()
+        assert wait_for_eof(client, timeout=10.0)
+        fresh = world.connect()
+        world.wait_for_log(f"SESSION NOT RESUMED: {player} logged in again", instance=new)
+        assert fresh.eval_expect_success('#0.gone') == f'{{{player}}}'
+        time.sleep(4.0)
+        assert fresh.eval_expect_success('#0.gone') == f'{{{player}}}'
+        assert player in fresh.eval_expect_success('connected_players()')
+
+        second = world.graceful_restart()
+        world.wait_for_log(f"SESSION REATTACHED: {player}", instance=second)
+        assert fresh.eval_expect_success('#0.gone') == f'{{{player}}}'
+
+    def test_ses_020_boot_with_output_backed_up_closes_client(self, world):
+        """SES-020: booting a player whose client isn't reading its output
+        still ends the session: the server writes out the CLOSE after the
+        output, so the edge doesn't take the carrier's end for a crash."""
+        client = world.connect()
+        client._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        session = world.session_for(client)
+        run(client, 'fork (0) s = "x"; for i in [1..13] s = s + s; endfor '
+                    'for i in [1..100] notify(player, s); endfor boot_player(player); endfork')
+        time.sleep(1.0)
+
+        assert wait_for_eof(client, timeout=15.0)
+        assert session.closed_by_server

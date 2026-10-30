@@ -556,9 +556,12 @@ class SessionProtocol(KaitaiStruct):
             self.reason = KaitaiStream.resolve_enum(SessionProtocol.ListenFailure, self._io.read_u1())
             if not  ((self.reason == SessionProtocol.ListenFailure.port) or (self.reason == SessionProtocol.ListenFailure.certificate)) :
                 raise kaitaistruct.ValidationNotAnyOfError(self.reason, self._io, u"/types/listen_failed/seq/1")
-            self.reserved = self._io.read_bytes(5)
-            if not self.reserved == b"\x00\x00\x00\x00\x00":
-                raise kaitaistruct.ValidationNotEqualError(b"\x00\x00\x00\x00\x00", self.reserved, self._io, u"/types/listen_failed/seq/2")
+            self.reserved = self._io.read_bytes(1)
+            if not self.reserved == b"\x00":
+                raise kaitaistruct.ValidationNotEqualError(b"\x00", self.reserved, self._io, u"/types/listen_failed/seq/2")
+            self.serial = self._io.read_u4be()
+            if not self.serial >= 1:
+                raise kaitaistruct.ValidationLessThanError(1, self.serial, self._io, u"/types/listen_failed/seq/3")
             self.diagnostic = (self._io.read_bytes_full()).decode(u"UTF-8")
 
 
@@ -575,6 +578,9 @@ class SessionProtocol(KaitaiStruct):
             self._read()
 
         def _read(self):
+            self.serial = self._io.read_u4be()
+            if not self.serial >= 1:
+                raise kaitaistruct.ValidationLessThanError(1, self.serial, self._io, u"/types/listeners/seq/0")
             self.entries = []
             i = 0
             while not self._io.is_eof():

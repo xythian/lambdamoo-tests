@@ -30,6 +30,23 @@ def wait_for_log(server, text, timeout=3.0):
     return False
 
 
+def free_port():
+    """Return a TCP port nothing is listening on.
+
+    Only the TCP backend picks a port for listen(obj, 0); a session build's
+    edge needs one named, so tests that aren't about port 0 name one.
+    """
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def listen_on_free_port(client, obj, *args):
+    """listen() on obj at a free port and return the port listen() reports."""
+    extra = "".join(f", {arg}" for arg in args)
+    return int(assert_moo_success(client.eval(f"listen({obj}, {free_port()}{extra})")))
+
+
 def read_until(sock, text, timeout=3.0):
     """Read from a socket until text is seen or the timeout passes; return what was read."""
     sock.settimeout(0.1)
@@ -49,7 +66,7 @@ def read_until(sock, text, timeout=3.0):
 class TestListeners:
     """listen(), unlisten() and listeners()."""
 
-    def test_admin_001_listen_on_ephemeral_port(self, client):
+    def test_admin_001_listen_on_ephemeral_port(self, client, requires_tcp_listeners):
         """ADMIN-001: listen(obj, 0) picks a free port, returns it, and listeners() shows it."""
         obj = assert_moo_success(client.eval("create(#1)"))
         port = int(assert_moo_success(client.eval(f"listen({obj}, 0)")))
@@ -62,7 +79,7 @@ class TestListeners:
         """ADMIN-002: Connections to a listener are handled by the listening object's do_login_command."""
         obj = assert_moo_success(client.eval("create(#1)"))
         define_verb(client, obj, "do_login_command", ['notify(player, "via listener: " + argstr);'])
-        port = int(assert_moo_success(client.eval(f"listen({obj}, 0)")))
+        port = listen_on_free_port(client, obj)
         with socket.create_connection(("127.0.0.1", port), timeout=3) as sock:
             sock.sendall(b"hello there\r\n")
             assert "via listener: hello there" in read_until(sock, "hello there")
@@ -73,8 +90,8 @@ class TestListeners:
         guest = assert_moo_success(client.eval("create(#1)"))
         assert_moo_success(client.eval(f"set_player_flag({guest}, 1)"))
         define_verb(client, obj, "do_login_command", [f"return {guest};"])
-        quiet = int(assert_moo_success(client.eval(f"listen({obj}, 0)")))
-        loud = int(assert_moo_success(client.eval(f"listen({obj}, 0, 1)")))
+        quiet = listen_on_free_port(client, obj)
+        loud = listen_on_free_port(client, obj, 1)
         assert_moo_int(client.eval(f"{{{obj}, {loud}, 1}} in listeners() > 0"), 1)
         with socket.create_connection(("127.0.0.1", loud), timeout=3) as sock:
             sock.sendall(b"connect\r\n")
@@ -88,7 +105,7 @@ class TestListeners:
     def test_admin_004_unlisten_closes_port(self, client):
         """ADMIN-004: After unlisten() the port refuses connections."""
         obj = assert_moo_success(client.eval("create(#1)"))
-        port = int(assert_moo_success(client.eval(f"listen({obj}, 0)")))
+        port = listen_on_free_port(client, obj)
         assert_moo_success(client.eval(f"unlisten({port})"))
         with pytest.raises(OSError):
             socket.create_connection(("127.0.0.1", port), timeout=1).close()
@@ -96,7 +113,7 @@ class TestListeners:
     def test_admin_005_listen_errors(self, client):
         """ADMIN-005: An invalid object or a port already listened on is E_INVARG; unlisten of an unknown port too."""
         obj = assert_moo_success(client.eval("create(#1)"))
-        port = assert_moo_success(client.eval(f"listen({obj}, 0)"))
+        port = listen_on_free_port(client, obj)
         assert_moo_raises(client, f"listen({obj}, {port})", "E_INVARG")
         assert_moo_raises(client, "listen(#999999, 0)", "E_INVARG")
         assert_moo_raises(client, f'listen({obj}, "port")', "E_TYPE")

@@ -1,4 +1,4 @@
-"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-020).
+"""Session backend: the wire protocol as the server implements it (SPR-001 through SPR-022).
 
 These speak protocol 1.0 to the server directly, as an edge would, to check
 the handshake, positions, acknowledgements and the server's refusal of frames
@@ -12,9 +12,10 @@ import time
 import pytest
 
 from lib.session import (
-    ACK, BIND, CLOSE, DIR_INPUT, HEADER, HELLO, MAGIC, MODE_CRASH,
-    HELLO_FIXED, MODE_GRACEFUL, MODE_INITIAL, OUTPUT, WELCOME, Carrier, Hello, decode_ack,
-    decode_bind, decode_data, describe_connection, encode_fields, encode_frame, encode_input,
+    ACK, BIND, CLOSE, DIR_INPUT, HEADER, HELLO, KIND_CONTROL, LISTEN_FAILED_PORT, LISTENERS,
+    MAGIC, MODE_CRASH, HELLO_FIXED, MODE_GRACEFUL, MODE_INITIAL, OUTPUT, WELCOME, Carrier, Hello,
+    decode_ack, decode_bind, decode_data, decode_listeners, describe_connection, encode_fields,
+    encode_frame, encode_input, encode_listen_failed,
 )
 
 CONNECTION = describe_connection('tcp', 7777, ('192.0.2.10', 40000))
@@ -42,9 +43,9 @@ class Attached:
         self.carrier.send(encode_input(self.input_position, data))
         self.input_position += len(data)
 
-    def collect(self, until: bytes, timeout: float = 5.0) -> bytes:
-        """Read frames until the output contains until."""
-        if until in self.output:
+    def collect(self, until: bytes, timeout: float = 5.0, since: int = 0) -> bytes:
+        """Read frames until the output from position since on contains until."""
+        if until in self.output[since:]:
             return self.output
         for frame in self.carrier.frames(timeout):
             if frame.type == OUTPUT:
@@ -58,7 +59,7 @@ class Attached:
                 self.input_acked = position
             elif frame.type == BIND:
                 self.binds.append(decode_bind(frame.payload))
-            if until in self.output:
+            if until in self.output[since:]:
                 return self.output
         raise AssertionError(f"never received {until!r}; got {self.output!r}")
 
@@ -69,7 +70,7 @@ class Attached:
     def eval(self, expression: str) -> bytes:
         start = len(self.output)
         self.send(f';{expression}\n'.encode())
-        self.collect(b'=>')
+        self.collect(b'=>', since=start)
         return self.output[start:]
 
 
@@ -108,6 +109,15 @@ class TestHandshake:
         """SPR-012: only a resumed session names the database it was detached with."""
         carrier = Carrier(str(session_server.socket_path))
         carrier.send(encode_frame(HELLO, new_hello(database=bytes(range(16))).encode()))
+        assert carrier.is_closed()
+
+    @pytest.mark.parametrize('positions', [(5, 0), (0, 5)], ids=['input', 'output'])
+    def test_spr_021_initial_hello_with_positions_is_refused(self, session_server, positions):
+        """SPR-021: a new session starts both streams at position 0."""
+        hello = new_hello()
+        hello.input_position, hello.output_position = positions
+        carrier = Carrier(str(session_server.socket_path))
+        carrier.send(encode_frame(HELLO, hello.encode()))
         assert carrier.is_closed()
 
     def test_spr_013_resume_naming_other_database_is_refused(self, session_server):
@@ -318,3 +328,39 @@ class TestInputFlowControl:
                 sent += len(line) * 64
         assert sent < 16 * 1024 * 1024
         assert session_server.is_running()
+
+
+class TestControl:
+    """The control attachment, spoken to directly."""
+
+    @staticmethod
+    def next_listeners(control: Carrier):
+        for frame in control.frames(5.0):
+            if frame.type == LISTENERS:
+                return decode_listeners(frame.payload)
+        raise AssertionError("no LISTENERS arrived")
+
+    def test_spr_022_stale_listen_failed_is_ignored(self, session_server):
+        """SPR-022: a LISTEN_FAILED answering a LISTENERS sent before the port
+        was last listened on doesn't drop the listener; one answering a
+        LISTENERS that named it does."""
+        control = Carrier(str(session_server.socket_path), check_sent=True)
+        control.hello(Hello(secrets.token_bytes(16), secrets.token_bytes(16), 1, MODE_INITIAL,
+                            kind=KIND_CONTROL))
+        first, ports = self.next_listeners(control)
+        assert ports == []
+        wizard = Attached(session_server.socket_path)
+        wizard.login()
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        wizard.eval(f'listen(#0, {port})')
+        second, ports = self.next_listeners(control)
+        assert second > first and [listen.port for listen in ports] == [port]
+
+        control.send(encode_listen_failed(port, LISTEN_FAILED_PORT, 'stale', first))
+        assert f', {port}, '.encode() in wizard.eval('listeners()')
+        control.send(encode_listen_failed(port, LISTEN_FAILED_PORT, 'in use', second))
+        third, ports = self.next_listeners(control)
+        assert third > second and ports == []
+        assert f', {port}, '.encode() not in wizard.eval('listeners()')

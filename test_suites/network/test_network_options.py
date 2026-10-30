@@ -54,6 +54,11 @@ class TestListenOptions:
             == str(port)
         assert f'{{#0, {port}, 1}}' in client.eval_expect_success('listeners()')
 
+    def test_print_messages_list_still_means_print_messages(self, client, requires_options, port):
+        """A third argument that isn't a list of pairs, such as {1}, is print-messages, as before options."""
+        assert client.eval_expect_success(f'listen(#0, {port}, {{1}})') == str(port)
+        assert f'{{#0, {port}, 1}}' in client.eval_expect_success('listeners()')
+
     def test_options_after_print_messages(self, client, requires_options, port):
         """The options list may follow a print-messages argument."""
         assert client.eval_expect_success(f'listen(#0, {port}, 1, {{}})') == str(port)
@@ -67,7 +72,7 @@ class TestListenOptions:
     def test_malformed_options(self, client, requires_options, port):
         """Each option is a {name, value} pair."""
         assert result_of(client, f'listen(#0, {port}, 0, "tls")') == 'E_TYPE'
-        assert result_of(client, f'listen(#0, {port}, {{"tls"}})') == 'E_INVARG'
+        assert result_of(client, f'listen(#0, {port}, 0, {{"tls"}})') == 'E_INVARG'
         assert result_of(client, f'listen(#0, {port}, {{{{1, 1}}}})') == 'E_INVARG'
 
     def test_certificate_needs_tls(self, client, requires_options, port):
